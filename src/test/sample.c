@@ -1,8 +1,7 @@
 #include <stdlib.h>
-# \
-  include \
-  <stdio.h>
-# include <unistd.h>
+#include <unistd.h>
+
+#define MY_VALUE 15
 
 int main(int argc, char** argv) {
 
@@ -12,6 +11,11 @@ int main(int argc, char** argv) {
   #ifdef ANOTHER_FEATURE
   puts("Running on verbose and another!");
   #endif
+
+  #if MY_VALUE > 10
+  puts("Running on verbose and MY_VALUE > 10");
+  #endif
+
   #endif
 
   return EXIT_SUCCESS;

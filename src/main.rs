@@ -1,7 +1,12 @@
-use std::{collections::BTreeSet, env::args};
+use std::collections::BTreeSet;
+use tree_sitter::{Parser, Node, Point};
+use diffy::{Line, Hunk, Patch};
+use std::env::args;
 
-use diffy::{Hunk, Line, Patch};
-use tree_sitter::{Node, Parser, Point};
+#[derive(clap::Parser)]
+struct CliArgs {
+
+}
 
 fn main() {
     let mut parser = Parser::new();
