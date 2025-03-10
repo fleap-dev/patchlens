@@ -7,9 +7,13 @@ int main(int argc, char** argv) {
 
   puts("Hello world!");
   #ifdef VERBOSE_FEATURE
+
   puts("Running on verbose mode!");
+
   #ifdef ANOTHER_FEATURE
   puts("Running on verbose and another!");
+  #else
+  puts("Running on verbose but without ANOTHER");
   #endif
 
   #if MY_VALUE > 10
@@ -20,3 +24,4 @@ int main(int argc, char** argv) {
 
   return EXIT_SUCCESS;
 }
+
