@@ -1,10 +1,13 @@
 use clap::Parser as ClapParser;
 use diffy::{Hunk, Line, Patch};
 use regex::Regex;
+use std::{collections::HashSet, path::PathBuf};
 use tracing::{debug, info};
-use std::{collections::BTreeSet, path::PathBuf};
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use tree_sitter::{Node, Parser, Point};
-use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+
+#[cfg(test)]
+mod test;
 
 #[derive(ClapParser, Debug)]
 #[command(version, about, long_about = None)]
@@ -22,11 +25,6 @@ fn main() {
         .init();
 
     let args = Cli::parse();
-
-    let mut parser = Parser::new();
-    parser
-        .set_language(&tree_sitter_c::LANGUAGE.into())
-        .expect("Error loading Rust grammar");
 
     let source = std::fs::read_to_string(&args.translation_unit).unwrap();
     let patch_src = std::fs::read_to_string(&args.patch_file).unwrap();
@@ -47,9 +45,6 @@ fn main() {
 
     let patched_source_lines = patched_source.lines().collect::<Vec<_>>();
 
-    let tree = parser.parse(&patched_source, None).unwrap();
-    let root_node = tree.root_node();
-
     for (idx, hunk) in patch.hunks().iter().enumerate() {
         //println!("Parsing hunk #{idx}...");
         let padding = context_padding_size(hunk);
@@ -58,14 +53,19 @@ fn main() {
             hunk.new_range().end() - padding.1 - 2,
         );
         let end_line_len = patched_source_lines[affected.1].len();
-        debug!("NEW HUNK RANGE: {:?} pad {padding:?} END: {end_line_len}", hunk.new_range());
+        debug!(
+            "NEW HUNK RANGE: {:?} pad {padding:?} END: {end_line_len}",
+            hunk.new_range()
+        );
         let configs = presence_condition_of_src_range(
             &patched_source,
-            root_node,
             Point::new(affected.0, 0),
             Point::new(affected.1, end_line_len),
         );
-        info!("Hunk #{idx} only affect configs that matches: {}", configs.join(" && "));
+        info!(
+            "Hunk #{idx} only affect configs that matches: {}",
+            configs.into_iter().collect::<Vec<_>>().join(" && ")
+        );
     }
     //for (idx, line_src) in lines.enumerate() {
     //    let line = idx + 1;
@@ -102,32 +102,44 @@ fn context_padding_size(hunk: &Hunk<'_, str>) -> (usize, usize) {
 }
 
 fn print_children_with_field_names(node: tree_sitter::Node, idx: u32, ref_node: Option<Node>) {
-        for _ in 1..idx {
-            print!("  ");
-        }
-        println!("{node:?}");
-        let mut cursor = node.walk(); // Create a TreeCursor for the node
-        if cursor.goto_first_child() {
-            loop {
-                let child = cursor.node();
-                let field_name = cursor.field_name().unwrap_or("None");
-                let is_ref = Some(child.id()) == ref_node.map(|n| n.id());
-                for _ in 0..idx {
-                    print!("  ");
-                }
-                println!("Child node kind: {}, Field name: {} Is_ref: {is_ref}", child.kind(), field_name);
+    for _ in 1..idx {
+        print!("  ");
+    }
+    println!("{node:?}");
+    let mut cursor = node.walk(); // Create a TreeCursor for the node
+    if cursor.goto_first_child() {
+        loop {
+            let child = cursor.node();
+            let field_name = cursor.field_name().unwrap_or("None");
+            let is_ref = Some(child.id()) == ref_node.map(|n| n.id());
+            for _ in 0..idx {
+                print!("  ");
+            }
+            println!(
+                "Child node kind: {}, Field name: {} Is_ref: {is_ref}",
+                child.kind(),
+                field_name
+            );
 
-                // Move to the next sibling; if there isn't one, break the loop
-                if !cursor.goto_next_sibling() {
-                    break;
-                }
+            // Move to the next sibling; if there isn't one, break the loop
+            if !cursor.goto_next_sibling() {
+                break;
             }
         }
     }
+}
 
-fn presence_condition_of_src_range(source: &str, node: Node<'_>, start: Point, end: Point) -> Vec<String> {
-    let mut conditions = Vec::new();
-    if let Some(innermost) = node.descendant_for_point_range(start, end) {
+pub fn presence_condition_of_src_range(source: &str, start: Point, end: Point) -> HashSet<String> {
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_c::LANGUAGE.into())
+        .expect("Error loading Rust grammar");
+
+    let tree = parser.parse(source, None).unwrap();
+    let root_node = tree.root_node();
+
+    let mut conditions = HashSet::new();
+    if let Some(innermost) = root_node.descendant_for_point_range(start, end) {
         debug!("INNERMOST FOR ({start:?}, {end:?}) = {innermost:?}");
         let mut current = Some(innermost);
         let mut last = None;
@@ -135,37 +147,40 @@ fn presence_condition_of_src_range(source: &str, node: Node<'_>, start: Point, e
         while let Some(inner) = current {
             print_children_with_field_names(inner, idx, last);
 
+            // TODO: implement for C++
             match inner.kind() {
                 "preproc_ifdef" => {
                     let condition_name = inner.named_child(0).unwrap();
+                    let last_kind = last.map(|l| l.kind());
+                    println!("{:?}", inner.utf8_text(source.as_bytes()));
 
-                    match last {
-                        Some(last) if last.kind() == "preproc_else" => {
-                            conditions.push(format!("(!{})", condition_name.utf8_text(source.as_bytes()).unwrap()));
-                        },
-                        _ => {
-                            conditions.push(format!("({})", condition_name.utf8_text(source.as_bytes()).unwrap()));
-                        }
-                    }
-                },
-                "preproc_ifndef" => {
-                    let condition_name = inner.named_child(0).unwrap();
+                    let macro_cmd = inner
+                        .utf8_text(source.as_bytes())
+                        .unwrap()
+                        .split_once(" ")
+                        .unwrap()
+                        .0
+                        .to_lowercase();
 
-                    match last {
-                        Some(last) if last.kind() == "preproc_else" => {
-                            conditions.push(format!("({})", condition_name.utf8_text(source.as_bytes()).unwrap()));
-                        },
-                        _ => {
-                            conditions.push(format!("(!{})", condition_name.utf8_text(source.as_bytes()).unwrap()));
-                        }
-                    }
-                },
+                    let prefix = match (macro_cmd.as_str(), last_kind) {
+                        ("#ifdef", Some("preproc_else")) => "!",
+                        ("#ifndef", Some("preproc_else")) => "",
+                        ("#ifdef", _) => "",
+                        ("#ifndef", _) => "!",
+                        _ => "",
+                    };
+
+                    conditions.insert(format!(
+                        "({prefix}{})",
+                        condition_name.utf8_text(source.as_bytes()).unwrap()
+                    ));
+                }
                 "preproc_else" => {
                     // Ignored because this will be checked on the parent preproc_ifdef...
-                },
+                }
                 "preproc_if" => {
                     todo!()
-                },
+                }
                 _ => {}
             }
             idx += 1;
@@ -174,16 +189,4 @@ fn presence_condition_of_src_range(source: &str, node: Node<'_>, start: Point, e
         }
     }
     conditions
-}
-
-fn read<'a>(node: Node<'a>, depth: usize) {
-    for _ in 0..depth {
-        print!("  ");
-    }
-    println!("{}", node.kind());
-    for idx in 0..node.child_count() {
-        if let Some(child) = node.child(idx) {
-            read(child, depth + 1);
-        }
-    }
 }
