@@ -2,6 +2,7 @@ use std::{
     io::Write, path::Path, process::{Command, Stdio}
 };
 use anyhow::{ensure, Result};
+use tracing::debug;
 
 pub const PATCH_WRAPPER_IFDEF: &str = "__PATCHLENS_INTERNAL_CURRENT_PATCH__";
 
@@ -15,6 +16,7 @@ pub fn apply_patch_in_memory(directory: &Path, patch_content: &str) -> Result<St
         .current_dir(directory)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()?;
 
     if let Some(ref mut stdin) = child.stdin {
@@ -27,5 +29,14 @@ pub fn apply_patch_in_memory(directory: &Path, patch_content: &str) -> Result<St
 
     let stdout = String::from_utf8(output.stdout)?;
 
+    debug!("Output from patch: {}", String::from_utf8_lossy(&output.stderr));
+
     Ok(stdout)
+}
+
+pub fn get_patch_original_file(single_file_patch_src: &str) -> &str {
+    let line = single_file_patch_src.lines().nth(1).unwrap();
+    assert!(line.starts_with("+++"));
+    let (_, raw_filename) = line.split_once(" ").unwrap();
+    &raw_filename[2..]
 }

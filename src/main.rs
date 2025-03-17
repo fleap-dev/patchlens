@@ -1,13 +1,13 @@
 use anyhow::Context;
 use clap::Parser as ClapParser;
 use logical_utils::Flag;
-use regex::Regex;
 use std::{collections::HashSet, path::PathBuf};
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use tree_sitter::{Node, Parser};
 
 mod logical_utils;
+mod mail_utils;
 mod patch_utils;
 #[cfg(test)]
 mod test;
@@ -16,11 +16,11 @@ mod test;
 #[command(version, about = "Analyze Git patches to detect the variants affected", long_about = None)]
 struct Cli {
     /// The folder where the Git repository is located
-    #[arg(short, long)]
+    #[arg()]
     pub git_directory: PathBuf,
     /// The patch file to be analyzed
-    #[arg(short, long)]
-    pub patch_file: PathBuf,
+    #[arg()]
+    pub mail_patch_file: PathBuf,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -32,22 +32,46 @@ fn main() -> anyhow::Result<()> {
     let args = Cli::parse();
 
     let git_repo = args.git_directory;
-    let patch_src = std::fs::read_to_string(&args.patch_file)
+    let mail_patch_src = std::fs::read_to_string(&args.mail_patch_file)
         .context("failed to read the contents of the patch")?;
 
-    let re = Regex::new(r"\n-- \n(cgit )?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?\n").unwrap();
-    let patch_src = re.replace_all(&patch_src, "");
+    // A patch file from `git format-patch` may patch multiple files. Here we split this patch file
+    // into individual patches that only affect one file.
+    let single_file_patches = mail_utils::parse_mail_patch(&mail_patch_src);
 
-    let patched_source = patch_utils::apply_patch_in_memory(&git_repo, &patch_src)
-        .context("failed to apply patch")?;
+    // TODO: remove unwraps
+    single_file_patches
+        .iter()
+        .map(|patch| {
+            (
+                patch_utils::get_patch_original_file(patch),
+                patch_utils::apply_patch_in_memory(&git_repo, patch)
+                    .context("failed to apply patch"),
+            )
+        })
+        .map(|(filename, patched_source_result)| {
+            (
+                filename,
+                patched_source_result
+                    .map(|patched_source| analyze_variants_affected(&patched_source)),
+            )
+        })
+        .for_each(|(filename, flag)| {
+            match flag {
+                Ok(flag) => {
+                    info!("File {filename} needs {flag} variables to be affected!");
+                },
+                Err(e) => error!("Error computing flag for file {filename}: {e:?}"),
+            }
+        });
 
-    for (idx, line) in patched_source.lines().enumerate() {
-        debug!("{idx:04} | {line}");
-    }
-
-    let flag = analyze_variants_affected(&patched_source);
-
-    info!("All affected variants must match the flag: {flag:?}");
+    //let result = Flag::Or(result);
+    //
+    //info!("All affected variants must match the flag: {result}");
+    //info!(
+    //    "All affected variants must match the flag: {}",
+    //    result.simplify()
+    //);
 
     Ok(())
 }
@@ -55,13 +79,10 @@ fn main() -> anyhow::Result<()> {
 pub fn find_patchlens_ifdef_nodes<'a>(source: &'a str, root: Node<'a>) -> Vec<Node<'a>> {
     fn recursive<'a>(source: &str, node: Node<'a>, output: &mut Vec<Node<'a>>) {
         if node.kind() == "preproc_ifdef" {
-            let (ifdef_cmd, flag) = parse_ifdef_node(source, &node);
-            match ifdef_cmd {
-                IfdefCommand::Ifdef if flag == patch_utils::PATCH_WRAPPER_IFDEF => {
-                    output.push(node);
-                    return;
-                },
-                _ => {},
+            let (_ifdef_cmd, flag) = parse_ifdef_node(source, &node);
+            if flag == patch_utils::PATCH_WRAPPER_IFDEF {
+                output.push(node);
+                return;
             }
         }
 
@@ -89,8 +110,11 @@ pub fn analyze_variants_affected(source: &str) -> Flag {
 
     let patchlens_ifdef_nodes = find_patchlens_ifdef_nodes(source, root_node);
 
+    debug!("NODES: {patchlens_ifdef_nodes:?}");
+
     let hunk_configs = patchlens_ifdef_nodes
         .into_iter()
+        .map(|node| node.parent().unwrap()) // analyze the parent nodes of the new inserted nodes
         .map(|n| analyze_configs_for_ast_node(source, n))
         .collect::<Vec<_>>();
 
@@ -98,7 +122,7 @@ pub fn analyze_variants_affected(source: &str) -> Flag {
 }
 
 fn analyze_configs_for_ast_node(source: &str, node: Node) -> Flag {
-    let mut conditions = HashSet::new();
+    let mut conditions = Vec::new();
     let mut current = Some(node);
     let mut last: Option<Node> = None;
     while let Some(inner) = current {
@@ -107,7 +131,6 @@ fn analyze_configs_for_ast_node(source: &str, node: Node) -> Flag {
             "preproc_ifdef" => {
                 let condition_name = inner.named_child(0).unwrap();
                 let last_kind = last.map(|l| l.kind());
-                println!("{:?}", inner.utf8_text(source.as_bytes()));
 
                 let macro_cmd = inner
                     .utf8_text(source.as_bytes())
@@ -117,18 +140,22 @@ fn analyze_configs_for_ast_node(source: &str, node: Node) -> Flag {
                     .0
                     .to_lowercase();
 
-                let prefix = match (macro_cmd.as_str(), last_kind) {
-                    ("#ifdef", Some("preproc_else")) => "!",
-                    ("#ifndef", Some("preproc_else")) => "",
-                    ("#ifdef", _) => "",
-                    ("#ifndef", _) => "!",
-                    _ => "",
+                let raw_flag = condition_name
+                    .utf8_text(source.as_bytes())
+                    .unwrap()
+                    .to_owned();
+
+                let flag: Flag = match (macro_cmd.as_str(), last_kind) {
+                    ("#ifdef", Some("preproc_else")) => {
+                        Flag::Not(Box::new(Flag::Literal(raw_flag)))
+                    }
+                    ("#ifndef", Some("preproc_else")) => Flag::Literal(raw_flag),
+                    ("#ifdef", _) => Flag::Literal(raw_flag),
+                    ("#ifndef", _) => Flag::Not(Box::new(Flag::Literal(raw_flag))),
+                    _ => unreachable!(),
                 };
 
-                conditions.insert(format!(
-                    "({prefix}{})",
-                    condition_name.utf8_text(source.as_bytes()).unwrap()
-                ));
+                conditions.push(flag);
             }
             "preproc_else" => {
                 // Ignored because this will be checked on the parent preproc_ifdef...
@@ -141,12 +168,12 @@ fn analyze_configs_for_ast_node(source: &str, node: Node) -> Flag {
         last = current;
         current = inner.parent();
     }
-    let conditions = conditions
-        .into_iter()
-        .map(Flag::Literal)
-        .collect::<Vec<_>>();
 
-    Flag::And(conditions)
+    if conditions.is_empty() {
+        Flag::Literal("true".into())
+    } else {
+        Flag::And(conditions)
+    }
 }
 
 enum IfdefCommand {
