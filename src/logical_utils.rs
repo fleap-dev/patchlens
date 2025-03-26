@@ -2,6 +2,10 @@ use std::fmt::Display;
 
 #[derive(Debug, Clone)]
 pub enum Flag {
+    /// Always true
+    True,
+    /// Always false
+    False,
     /// If the build system includes this file to be built
     Building(String),
     /// A raw flag like `CONFIG_ENABLE_FEATURE_A`
@@ -17,6 +21,8 @@ pub enum Flag {
 impl Display for Flag {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::True => write!(f, "1"),
+            Self::False => write!(f, "0"),
             Self::Building(file) => write!(f, "building(\"{file}\")"),
             Self::Literal(s) => write!(f, "{s}"),
             Self::Not(s) => write!(f, "(!{s})"),
@@ -57,6 +63,8 @@ impl Display for Flag {
 impl Flag {
     pub fn simplify(self) -> Flag {
         match self {
+            Flag::True => Flag::True,
+            Flag::False => Flag::False,
             Flag::Building(f) => Flag::Building(f),
             Flag::Literal(s) => Flag::Literal(s),
             Flag::Not(inner) => {
@@ -68,7 +76,11 @@ impl Flag {
             }
             Flag::And(children) => {
                 let mut new_children = Vec::new();
-                for child in children.into_iter().map(Self::simplify) {
+                for child in children
+                    .into_iter()
+                    .map(Self::simplify)
+                    .filter(|c| !matches!(c, Self::True))
+                {
                     if let Flag::And(nested) = child {
                         new_children.extend(nested);
                     } else {
@@ -76,7 +88,7 @@ impl Flag {
                     }
                 }
                 match new_children.len() {
-                    0 => Flag::And(vec![]), // Handle empty case if needed
+                    0 => Flag::True, // Handle empty case if needed
                     1 => new_children.into_iter().next().unwrap(),
                     _ => Flag::And(new_children),
                 }
@@ -84,6 +96,9 @@ impl Flag {
             Flag::Or(children) => {
                 let mut new_children = Vec::new();
                 for child in children.into_iter().map(Self::simplify) {
+                    if matches!(child, Self::True) {
+                        return Flag::True;
+                    }
                     if let Flag::Or(nested) = child {
                         new_children.extend(nested);
                     } else {

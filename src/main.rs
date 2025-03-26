@@ -180,7 +180,7 @@ fn analyze_configs_for_ast_node(source: &str, node: Node) -> Flag {
     }
 
     if conditions.is_empty() {
-        Flag::Literal("true".into())
+        Flag::True
     } else {
         Flag::And(conditions)
     }
