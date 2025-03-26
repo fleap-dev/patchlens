@@ -1,8 +1,8 @@
 use anyhow::Context;
 use clap::Parser as ClapParser;
 use logical_utils::Flag;
-use std::{collections::HashSet, path::PathBuf};
-use tracing::{debug, error, info};
+use std::path::PathBuf;
+use tracing::debug;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use tree_sitter::{Node, Parser};
 
@@ -40,7 +40,7 @@ fn main() -> anyhow::Result<()> {
     let single_file_patches = mail_utils::parse_mail_patch(&mail_patch_src);
 
     // TODO: remove unwraps
-    single_file_patches
+    let result = single_file_patches
         .iter()
         .map(|patch| {
             (
@@ -53,17 +53,24 @@ fn main() -> anyhow::Result<()> {
             (
                 filename,
                 patched_source_result
-                    .map(|patched_source| analyze_variants_affected(&patched_source)),
+                    .map(|patched_source| analyze_variants_affected(&patched_source, filename)),
             )
         })
-        .for_each(|(filename, flag)| {
-            match flag {
-                Ok(flag) => {
-                    info!("File {filename} needs {flag} variables to be affected!");
-                },
-                Err(e) => error!("Error computing flag for file {filename}: {e:?}"),
-            }
-        });
+        .map(|(_filename, flag)| flag)
+        .collect::<anyhow::Result<Vec<_>>>()
+        .context("failed to process patch")?;
+
+    let final_flags = Flag::Or(result).simplify();
+
+    println!("{final_flags}");
+    //.for_each(|(filename, flag)| {
+    //    match flag {
+    //        Ok(flag) => {
+    //            println!("File {filename} needs {flag} variables to be affected!");
+    //        },
+    //        Err(e) => error!("Error computing flag for file {filename}: {e:?}"),
+    //    }
+    //});
 
     //let result = Flag::Or(result);
     //
@@ -79,7 +86,8 @@ fn main() -> anyhow::Result<()> {
 pub fn find_patchlens_ifdef_nodes<'a>(source: &'a str, root: Node<'a>) -> Vec<Node<'a>> {
     fn recursive<'a>(source: &str, node: Node<'a>, output: &mut Vec<Node<'a>>) {
         if node.kind() == "preproc_ifdef" {
-            let (_ifdef_cmd, flag) = parse_ifdef_node(source, &node);
+            let (_ifdef_cmd, flag) =
+                parse_ifdef_node(source, &node).expect("failed to parse ifdef node");
             if flag == patch_utils::PATCH_WRAPPER_IFDEF {
                 output.push(node);
                 return;
@@ -99,7 +107,7 @@ pub fn find_patchlens_ifdef_nodes<'a>(source: &'a str, root: Node<'a>) -> Vec<No
     result
 }
 
-pub fn analyze_variants_affected(source: &str) -> Flag {
+pub fn analyze_variants_affected(source: &str, filename: &str) -> Flag {
     let mut parser = Parser::new();
     parser
         .set_language(&tree_sitter_c::LANGUAGE.into())
@@ -112,13 +120,15 @@ pub fn analyze_variants_affected(source: &str) -> Flag {
 
     debug!("NODES: {patchlens_ifdef_nodes:?}");
 
-    let hunk_configs = patchlens_ifdef_nodes
-        .into_iter()
-        .map(|node| node.parent().unwrap()) // analyze the parent nodes of the new inserted nodes
-        .map(|n| analyze_configs_for_ast_node(source, n))
-        .collect::<Vec<_>>();
+    let hunk_configs = Flag::Or(
+        patchlens_ifdef_nodes
+            .into_iter()
+            .map(|node| node.parent().unwrap()) // analyze the parent nodes of the new inserted nodes
+            .map(|n| analyze_configs_for_ast_node(source, n))
+            .collect::<Vec<_>>(),
+    );
 
-    Flag::Or(hunk_configs)
+    Flag::And(vec![hunk_configs, Flag::Building(filename.to_owned())])
 }
 
 fn analyze_configs_for_ast_node(source: &str, node: Node) -> Flag {
@@ -193,7 +203,10 @@ impl IfdefCommand {
     }
 }
 
-fn parse_ifdef_node<'a>(source: &'a str, ifdef_node: &Node) -> (IfdefCommand, &'a str) {
+fn parse_ifdef_node<'a>(
+    source: &'a str,
+    ifdef_node: &Node,
+) -> anyhow::Result<(IfdefCommand, &'a str)> {
     assert_eq!(
         ifdef_node.kind(),
         "preproc_ifdef",
@@ -203,14 +216,18 @@ fn parse_ifdef_node<'a>(source: &'a str, ifdef_node: &Node) -> (IfdefCommand, &'
     let macro_cmd = ifdef_node
         .utf8_text(source.as_bytes())
         .unwrap()
-        .split_once(" ")
+        .replace("\t", " ")
+        .split(" ")
+        .next()
         .unwrap()
-        .0
+        .trim()
         .to_lowercase();
-    let macro_cmd = IfdefCommand::from_str(macro_cmd).unwrap();
+
+    let macro_cmd = IfdefCommand::from_str(&macro_cmd)
+        .with_context(|| format!("unknown ifdef command: \"{macro_cmd}\"\n\n{source}\n\n"))?;
 
     let condition_name = ifdef_node.named_child(0).unwrap();
     let condition_name = condition_name.utf8_text(source.as_bytes()).unwrap();
 
-    (macro_cmd, condition_name)
+    Ok((macro_cmd, condition_name))
 }

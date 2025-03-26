@@ -2,6 +2,8 @@ use std::fmt::Display;
 
 #[derive(Debug, Clone)]
 pub enum Flag {
+    /// If the build system includes this file to be built
+    Building(String),
     /// A raw flag like `CONFIG_ENABLE_FEATURE_A`
     Literal(String),
     /// The inverse of a flag, like `!CONFIG_ENABLE_FEATURE_A`
@@ -15,6 +17,7 @@ pub enum Flag {
 impl Display for Flag {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Building(file) => write!(f, "building(\"{file}\")"),
             Self::Literal(s) => write!(f, "{s}"),
             Self::Not(s) => write!(f, "(!{s})"),
             Self::And(flags) => write!(
@@ -54,6 +57,7 @@ impl Display for Flag {
 impl Flag {
     pub fn simplify(self) -> Flag {
         match self {
+            Flag::Building(f) => Flag::Building(f),
             Flag::Literal(s) => Flag::Literal(s),
             Flag::Not(inner) => {
                 let simplified_inner = Self::simplify(*inner);
