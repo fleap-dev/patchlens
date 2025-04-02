@@ -1,0 +1,401 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 8377181..0cb51b9 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -184,6 +184,26 @@ dependencies = [
+  "nu-ansi-term 0.50.1",
+ ]
+ 
++[[package]]
++name = "encoding_rs"
++version = "0.8.35"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
++dependencies = [
++ "cfg-if",
++]
++
++[[package]]
++name = "hashify"
++version = "0.2.6"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f208758247e68e239acaa059e72e4ce1f30f2a4b6523f19c1b923d25b7e9cceb"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "syn",
++]
++
+ [[package]]
+ name = "heck"
+ version = "0.5.0"
+@@ -246,6 +266,16 @@ version = "0.4.22"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "a7a70ba024b9dc04c27ea2f0c0548feb474ec5c54bba33a7f72f873a39d07b24"
+ 
++[[package]]
++name = "mail-parser"
++version = "0.10.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "187a2b93c4c8c32f552ee06c2d99915e575de2fc7e04b07891c9edfee5b8edd6"
++dependencies = [
++ "encoding_rs",
++ "hashify",
++]
++
+ [[package]]
+ name = "matchers"
+ version = "0.1.0"
+@@ -346,6 +376,7 @@ dependencies = [
+  "cc",
+  "clap",
+  "diffy",
++ "mail-parser",
+  "patch",
+  "regex",
+  "tracing",
+diff --git a/Cargo.toml b/Cargo.toml
+index c603b79..b4ccc6f 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -9,6 +9,7 @@ cc = "*"
+ [dependencies]
+ clap = { version = "4.5.29", features = ["derive"] }
+ diffy = "0.4.0"
++mail-parser = "0.10.2"
+ patch = "0.7.0"
+ regex = "1.11.1"
+ tracing = "0.1.41"
+diff --git a/src/main.rs b/src/main.rs
+index c5ad087..2bf678b 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,5 +1,6 @@
+-use clap::Parser as ClapParser;
++use clap::{Parser as ClapParser, Subcommand};
+ use diffy::{Hunk, Line, Patch};
++use mail_parser::MessageParser;
+ use regex::Regex;
+ use std::{collections::HashSet, path::PathBuf};
+ use tracing::{debug, info};
+@@ -9,13 +10,26 @@ use tree_sitter::{Node, Parser, Point};
+ #[cfg(test)]
+ mod test;
+ 
+-#[derive(ClapParser, Debug)]
++#[derive(ClapParser)]
+ #[command(version, about, long_about = None)]
++#[command(propagate_version = true)]
+ struct Cli {
+-    #[arg()]
+-    pub translation_unit: PathBuf,
+-    #[arg()]
+-    pub patch_file: PathBuf,
++    #[command(subcommand)]
++    command: CliCommands,
++}
++
++#[derive(Subcommand)]
++enum CliCommands {
++    /// Analyzes a diff file in the unified format
++    File {
++        translation_unit: PathBuf,
++        patch_file: PathBuf,
++    },
++    /// Analyzes a patch in the `git format-patch` format
++    Git {
++        repo_path: PathBuf,
++        diff_file: PathBuf,
++    },
+ }
+ 
+ fn main() {
+@@ -26,18 +40,91 @@ fn main() {
+ 
+     let args = Cli::parse();
+ 
+-    let source = std::fs::read_to_string(&args.translation_unit).unwrap();
+-    let patch_src = std::fs::read_to_string(&args.patch_file).unwrap();
++    match args.command {
++        CliCommands::File {
++            translation_unit,
++            patch_file,
++        } => analyze_patch_file(translation_unit, patch_file),
++        CliCommands::Git {
++            repo_path,
++            diff_file,
++        } => analyze_patch_git(repo_path, diff_file),
++    }
++}
++
++/// Analyzes a diff in unified format
++fn analyze_patch_file(translation_unit: PathBuf, patch_file: PathBuf) {
++    let source =
++        std::fs::read_to_string(&translation_unit).expect("failed to read translation unit");
++    let patch = std::fs::read_to_string(&patch_file).expect("failed to read patch file");
++    analyze_patch(translation_unit.to_str().unwrap_or("non-utf8 file"), &source, &patch);
++}
++
++/// Analyzes a patch in the `git format-patch` format
++fn analyze_patch_git(repo_path: PathBuf, patch_file: PathBuf) {
++    let mail_content = std::fs::read_to_string(&patch_file).expect("failed to read the patch file");
++
++    let message = MessageParser::default()
++        .parse(&mail_content)
++        .expect("failed to parse email message");
++
++    let body = message
++        .body_text(0)
++        .expect("failed to read email body")
++        .to_string()
++        .replace('\r', "");
++
++    let git_format_patch_footer_regex = Regex::new(r"\n-- \n(cgit )?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?\n").unwrap();
++    let body = git_format_patch_footer_regex.replace_all(&body, "");
++
++    let segments = body
++        .split("\ndiff --git ")
++        .skip(1)
++        .filter_map(|s| s.split_once("\n"))
++        .map(|(_, s)| s)
++        .filter_map(|s| s.split_once("\n"))
++        .map(|(_, s)| s)
++        .collect::<Vec<_>>();
+ 
+-    let re = Regex::new(r"\n-- \ncgit .*\n").unwrap();
+-    let patch_src = re.replace_all(&patch_src, "");
++    let filename_regex = Regex::new("^a/").unwrap();
+ 
+-    //if patch_src.lines().filter(|l| l.starts_with("@@")).count() > 1 {
+-    //    todo!("multiple file patches are not yet implemented!");
+-    //}
+-    let patch = Patch::from_str(&patch_src).expect("error reading patch");
++    for (idx, seg) in segments.iter().enumerate() {
++        debug!("Patch {idx} contents:\n{seg}");
++        let patch = Patch::from_str(seg).unwrap_or_else(|_| panic!("invalid patch {idx}"));
++        let filename = patch
++            .original()
++            .unwrap_or_else(|| panic!("patch {idx} does not contain the original file name"));
++        let filename = filename_regex.replace(filename, "");
+ 
+-    let patched_source = diffy::apply(&source, &patch).expect("failed to apply patch");
++        let mut full_path = repo_path.clone();
++        full_path.push(&*filename);
++
++        match full_path.extension() {
++            Some(ext) if ext == "c" || ext == "h" => {
++                let source = std::fs::read_to_string(&full_path)
++                    .unwrap_or_else(|_| panic!("failed to read {filename}"));
++
++                analyze_patch(&filename, &source, seg);
++            }
++            _ => {
++                info!("Ignoring file {filename}");
++            }
++        }
++    }
++}
++
++fn analyze_patch(filename: &str, c_source: &str, patch_src: &str) {
++    c_source
++        .lines()
++        .enumerate()
++        .for_each(|(l, s)| println!("{l:04} | {s}"));
++    patch_src
++        .lines()
++        .enumerate()
++        .for_each(|(l, s)| println!("{l:04} | {s}"));
++
++    let patch = Patch::from_str(patch_src).expect("error reading patch");
++    let patched_source = diffy::apply(c_source, &patch).expect("failed to apply patch");
+ 
+     for (idx, line) in patched_source.lines().enumerate() {
+         debug!("{idx:04} | {line}");
+@@ -62,18 +149,15 @@ fn main() {
+             Point::new(affected.0, 0),
+             Point::new(affected.1, end_line_len),
+         );
++        let configs_str = configs.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" && ");
+         info!(
+-            "Hunk #{idx} only affect configs that matches: {}",
+-            configs.into_iter().collect::<Vec<_>>().join(" && ")
++            "Hunk #{idx} on {filename} only affect configs that matches: {}",
++            match configs.is_empty() {
++                true => "{1}",
++                false => &configs_str,
++            }
+         );
+     }
+-    //for (idx, line_src) in lines.enumerate() {
+-    //    let line = idx + 1;
+-    //    let point = Point::new(line, 0);
+-    //    let ifdefs = ifdefs_of_point(&source, root_node, point);
+-    //    println!("{line} | {line_src} | {ifdefs:?}");
+-    //}
+-    //read(root_node, 0);
+ }
+ 
+ fn context_padding_size(hunk: &Hunk<'_, str>) -> (usize, usize) {
+@@ -103,9 +187,9 @@ fn context_padding_size(hunk: &Hunk<'_, str>) -> (usize, usize) {
+ 
+ fn print_children_with_field_names(node: tree_sitter::Node, idx: u32, ref_node: Option<Node>) {
+     for _ in 1..idx {
+-        print!("  ");
++        debug!("  ");
+     }
+-    println!("{node:?}");
++    debug!("{node:?}");
+     let mut cursor = node.walk(); // Create a TreeCursor for the node
+     if cursor.goto_first_child() {
+         loop {
+@@ -113,9 +197,9 @@ fn print_children_with_field_names(node: tree_sitter::Node, idx: u32, ref_node:
+             let field_name = cursor.field_name().unwrap_or("None");
+             let is_ref = Some(child.id()) == ref_node.map(|n| n.id());
+             for _ in 0..idx {
+-                print!("  ");
++                debug!("  ");
+             }
+-            println!(
++            debug!(
+                 "Child node kind: {}, Field name: {} Is_ref: {is_ref}",
+                 child.kind(),
+                 field_name
+diff --git a/src/test/diff_tests.rs b/src/test/diff_tests.rs
+index e69de29..8b13789 100644
+--- a/src/test/diff_tests.rs
++++ b/src/test/diff_tests.rs
+@@ -0,0 +1 @@
++
+diff --git a/src/test/mod.rs b/src/test/mod.rs
+index cc9bbfd..d8aa50b 100644
+--- a/src/test/mod.rs
++++ b/src/test/mod.rs
+@@ -1,4 +1,2 @@
+-
+-mod presence_condition_tests;
+ mod diff_tests;
+-
++mod presence_condition_tests;
+diff --git a/src/test/presence_condition_tests.rs b/src/test/presence_condition_tests.rs
+index 5eb5355..5cb40d7 100644
+--- a/src/test/presence_condition_tests.rs
++++ b/src/test/presence_condition_tests.rs
+@@ -1,5 +1,5 @@
+-use tree_sitter::Point;
+ use std::collections::HashSet;
++use tree_sitter::Point;
+ 
+ use crate::presence_condition_of_src_range;
+ 
+@@ -9,7 +9,11 @@ macro_rules! assert_presence_condition {
+         let range_desc = format!("{}:{}-{}:{}", $a_row, $a_col, $b_row, $b_col);
+         let expected_set: HashSet<_> = $expected.into_iter().collect();
+         assert_eq!(
+-            presence_condition_of_src_range($src, Point::new($a_row, $a_col), Point::new($b_row, $b_col)),
++            presence_condition_of_src_range(
++                $src,
++                Point::new($a_row, $a_col),
++                Point::new($b_row, $b_col)
++            ),
+             expected_set,
+             "Failed to detect presence condition of src range {} of {}",
+             range_desc,
+@@ -24,7 +28,11 @@ const SAMPLE_SRC_2: &str = include_str!("samples/sample_2.c");
+ #[test]
+ fn test_ifdef_block() {
+     assert_presence_condition!(
+-        SAMPLE_SRC_1, 13, 0, 13, 41,
++        SAMPLE_SRC_1,
++        13,
++        0,
++        13,
++        41,
+         vec![
+             "(ANOTHER_FEATURE)".to_owned(),
+             "(VERBOSE_FEATURE)".to_owned(),
+@@ -32,24 +40,24 @@ fn test_ifdef_block() {
+     );
+ 
+     assert_presence_condition!(
+-        SAMPLE_SRC_1, 10, 0, 10, 34,
+-        vec![
+-            "(VERBOSE_FEATURE)".to_owned(),
+-        ]
++        SAMPLE_SRC_1,
++        10,
++        0,
++        10,
++        34,
++        vec!["(VERBOSE_FEATURE)".to_owned(),]
+     );
+ 
+-    assert_presence_condition!(
+-        SAMPLE_SRC_1, 0, 0, 0, 18,
+-        Vec::<String>::new()
+-    );
++    assert_presence_condition!(SAMPLE_SRC_1, 0, 0, 0, 18, Vec::<String>::new());
+ 
+-    assert_presence_condition!(
+-        SAMPLE_SRC_1, 26, 0, 30, 21,
+-        Vec::<String>::new()
+-    );
++    assert_presence_condition!(SAMPLE_SRC_1, 26, 0, 30, 21, Vec::<String>::new());
+ 
+     assert_presence_condition!(
+-        SAMPLE_SRC_1, 10, 0, 13, 41,
++        SAMPLE_SRC_1,
++        10,
++        0,
++        13,
++        41,
+         vec!["(VERBOSE_FEATURE)".to_owned()]
+     );
+ }
+@@ -57,7 +65,11 @@ fn test_ifdef_block() {
+ #[test]
+ fn test_ifdef_else_block() {
+     assert_presence_condition!(
+-        SAMPLE_SRC_1, 15, 0, 15, 48,
++        SAMPLE_SRC_1,
++        15,
++        0,
++        15,
++        48,
+         vec![
+             "(!ANOTHER_FEATURE)".to_owned(),
+             "(VERBOSE_FEATURE)".to_owned(),
+@@ -68,18 +80,23 @@ fn test_ifdef_else_block() {
+ #[test]
+ fn test_ifndef_block() {
+     assert_presence_condition!(
+-        SAMPLE_SRC_1, 23, 0, 23, 22,
+-        vec![
+-            "(VERBOSE_FEATURE)".to_owned(),
+-            "(!FAST_FEATURE)".to_owned()
+-        ]
++        SAMPLE_SRC_1,
++        23,
++        0,
++        23,
++        22,
++        vec!["(VERBOSE_FEATURE)".to_owned(), "(!FAST_FEATURE)".to_owned()]
+     );
+ }
+ 
+ #[test]
+ fn test_ifndef_else_block() {
+     assert_presence_condition!(
+-        SAMPLE_SRC_2, 35, 0, 35, 17,
++        SAMPLE_SRC_2,
++        35,
++        0,
++        35,
++        17,
+         vec![
+             "(VERBOSE_FEATURE)".to_owned(),
+             "(FAST_FEATURE)".to_owned(),
+@@ -88,4 +105,3 @@ fn test_ifndef_else_block() {
+         ]
+     );
+ }
+-
