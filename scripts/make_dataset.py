@@ -1,0 +1,215 @@
+#!/usr/bin/env -S uv --quiet run --script
+# /// script
+# requires-python = ">=3.13"
+# dependencies = [
+#     "gdown",
+# ]
+# ///
+
+import argparse
+import os
+import sys
+import sqlite3
+import csv
+import gdown
+import tempfile
+import zipfile
+from typing import Any
+
+CVE_DATA_DRIVE_URL = (
+    "https://drive.google.com/file/d/1mD9WsWyd7Nk_NyD3aPTpuFJxABm7pVUT/view?usp=sharing"
+)
+PATCHDB_DRIVE_URL = (
+    "https://drive.google.com/file/d/1gJQd5Kk6kI0z71D7HUaxM5KzbyWmmqwQ/view?usp=sharing"
+)
+
+
+def setup_tables(db: sqlite3.Connection):
+    cursor = db.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS "cves" (
+            "cve_id" TEXT PRIMARY KEY,
+            "year" INT NOT NULL,
+            "assigner" TEXT,
+            "problem_type" TEXT,
+            "references" TEXT,
+            "description" TEXT,
+            "configurations" TEXT,
+            "severity" TEXT,
+            "cve_exploitability_score" REAL,
+            "cve_impact_score" REAL,
+            "patch_file" TEXT NOT NULL
+        )
+    """)
+    db.commit()
+
+
+def safe_str_to_float(s: str) -> float | None:
+    try:
+        return float(s) if s.strip() else None
+    except ValueError:
+        return None
+
+
+def read_cve_data(path: str) -> dict[str, dict[str, str | float | None]]:
+    with open(path, mode="r", newline="", encoding="utf-8") as file:
+        reader = csv.DictReader(file)
+        entries = dict()
+        for row in reader:
+            entry = {
+                "cve_id": row["cve_id"],
+                "assigner": row["assigner"],
+                "problem_type": row["problemtype"],
+                "references": row["references"],
+                "description": row["description"],
+                "configurations": row["configurations"],
+                "severity": row["severity"],
+                "cve_exploitability_score": safe_str_to_float(
+                    row["cve_exploitability_score"]
+                ),
+                "cve_impact_score": safe_str_to_float(row["cve_impact_score"]),
+            }
+            entries[row["cve_id"]] = entry
+        return entries
+
+
+def read_patch_db(path: str) -> dict[str, str]:
+    patches = dict()
+    for filename in os.listdir(path):
+        cve, _, _ = filename.rpartition("-")
+        patches[cve] = filename
+    return patches
+
+
+def insert_cves(db: sqlite3.Connection, cves: list[dict[str, Any]]):
+    query = """
+        INSERT INTO "cves" (
+            cve_id,
+            year,
+            assigner,
+            problem_type,
+            "references",
+            description,
+            configurations,
+            severity,
+            cve_exploitability_score,
+            cve_impact_score,
+            patch_file
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+    values = [
+        (
+            cve["cve_id"],
+            int(cve["cve_id"].split("-")[1]),
+            cve["assigner"],
+            cve["problem_type"],
+            cve["references"],
+            cve["description"],
+            cve["configurations"],
+            cve["severity"],
+            cve["cve_exploitability_score"],
+            cve["cve_impact_score"],
+            cve["patch_file"],
+        )
+        for cve in cves
+    ]
+    db.executemany(query, values)
+    db.commit()
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--cve-data",
+        default="data/cvedata.csv",
+        help="The path for the CSV file containing all the CVEs",
+    )
+    parser.add_argument(
+        "--patches-folder",
+        default="data/patches",
+        help="The folder where the patches are located",
+    )
+    parser.add_argument(
+        "--output",
+        default="data/cve-dataset.db",
+        help="The output file for the database",
+    )
+
+    args = parser.parse_args()
+
+    cve_data_file: str = args.cve_data
+    patches_folder: str = args.patches_folder
+    output_file: str = args.output
+
+    if not os.path.exists(cve_data_file):
+        print("CVE data file not found! Downloading...")
+        gdown.download(CVE_DATA_DRIVE_URL, cve_data_file, quiet=False, fuzzy=True)
+        print("Downloaded CVE information!")
+
+    if not os.path.exists(patches_folder):
+        print("Patches folder not found! Downloading patchdb archive...")
+        with tempfile.NamedTemporaryFile(delete=True, suffix=".zip") as tmp:
+            gdown.download(PATCHDB_DRIVE_URL, tmp, quiet=False, fuzzy=True)
+            print("Extracting patches from patchdb archive...")
+            os.mkdir(patches_folder)
+            with zipfile.ZipFile(tmp, "r") as zip_ref:
+                for member in zip_ref.namelist():
+                    # Check if the member path starts with the target folder's path
+                    FOLDER_PREFIX = "patchDB/security/cve/"
+                    if member.startswith(FOLDER_PREFIX):
+                        filename = member[len(FOLDER_PREFIX) :].strip()
+                        if filename == "":
+                            continue
+                        print("Extracting", filename)
+                        target_path = os.path.join(patches_folder, filename)
+                        with (
+                            zip_ref.open(member) as source,
+                            open(target_path, "wb") as target,
+                        ):
+                            target.write(source.read())
+        print("Downloaded patches from patchdb!")
+
+    csv.field_size_limit(sys.maxsize)
+
+    db = sqlite3.connect(output_file)
+    setup_tables(db)
+    patches = read_patch_db(patches_folder)
+    cve_data = read_cve_data(cve_data_file)
+
+    print("Processing patches and cves...")
+
+    total = len(patches)
+    progress = 0
+    cves_with_patches = list()
+    for cve in patches:
+        print(f"\rProgress {progress}/{total}")
+        if cve in cve_data:
+            patch_file = patches[cve]
+            cve_info = cve_data[cve]
+            cves_with_patches.append(
+                {
+                    "cve_id": cve_info["cve_id"],
+                    "assigner": cve_info["assigner"],
+                    "problem_type": cve_info["problem_type"],
+                    "references": cve_info["references"],
+                    "description": cve_info["description"],
+                    "configurations": cve_info["configurations"],
+                    "severity": cve_info["severity"],
+                    "cve_exploitability_score": cve_info["cve_exploitability_score"],
+                    "cve_impact_score": cve_info["cve_impact_score"],
+                    "patch_file": patch_file,
+                }
+            )
+        else:
+            print("Warning: CVE", cve, "not found in the CVE DATA!")
+        progress += 1
+
+    print(
+        f"Saving {len(cves_with_patches)} CVEs with their respective patches into {output_file}"
+    )
+    insert_cves(db, cves_with_patches)
+    print("Completed.")
+
+
+if __name__ == "__main__":
+    main()
