@@ -7,6 +7,7 @@
 
 import argparse
 import sqlite3
+import os
 
 
 def cve_count(db: sqlite3.Connection) -> str:
@@ -60,6 +61,10 @@ def main():
     args = parser.parse_args()
 
     database_file: str = args.database
+
+    if not os.path.exists(database_file):
+        print(f"Database file at {database_file} does not exist!")
+        return
 
     db = sqlite3.connect(database_file)
 
