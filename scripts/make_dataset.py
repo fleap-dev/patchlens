@@ -96,6 +96,17 @@ def insert_cves(db: sqlite3.Connection, cves: list[dict[str, Any]]):
             cve_impact_score,
             patch_file
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(cve_id) DO UPDATE SET
+            year = excluded.year,
+            assigner = excluded.assigner,
+            problem_type = excluded.problem_type,
+            "references" = excluded."references",
+            description = excluded.description,
+            configurations = excluded.configurations,
+            severity = excluded.severity,
+            cve_exploitability_score = excluded.cve_exploitability_score,
+            cve_impact_score = excluded.cve_impact_score,
+            patch_file = excluded.patch_file;
     """
     values = [
         (
