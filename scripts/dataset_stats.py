@@ -72,6 +72,8 @@ def main():
         res = fn(db)
         print(f"{stat}: {res}")
 
+    db.close()
+
 
 if __name__ == "__main__":
     main()
