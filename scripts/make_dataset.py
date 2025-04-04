@@ -145,12 +145,19 @@ def main():
         default="data/cve-dataset.db",
         help="The output file for the database",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Do not insert the data into de database (read-only mode)",
+    )
 
     args = parser.parse_args()
 
     cve_data_file: str = args.cve_data
     patches_folder: str = args.patches_folder
     output_file: str = args.output
+    dry_run: bool = args.dry_run
 
     if not os.path.exists(cve_data_file):
         print("CVE data file not found! Downloading...")
@@ -218,7 +225,12 @@ def main():
     print(
         f"Saving {len(cves_with_patches)} CVEs with their respective patches into {output_file}"
     )
-    insert_cves(db, cves_with_patches)
+
+    if dry_run:
+        print("Skipping inserting data into database because of dry-run mode.")
+    else:
+        insert_cves(db, cves_with_patches)
+
     print("Completed.")
 
 
