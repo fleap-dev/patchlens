@@ -2,6 +2,7 @@
 # /// script
 # requires-python = ">=3.13"
 # dependencies = [
+#     "cpeparser",
 #     "gdown",
 # ]
 # ///
@@ -14,7 +15,10 @@ import csv
 import gdown
 import tempfile
 import zipfile
-from typing import Any
+import ast
+from collections import Counter
+from cpeparser import CpeParser
+from typing import Any, Optional
 
 CVE_DATA_DRIVE_URL = (
     "https://drive.google.com/file/d/1mD9WsWyd7Nk_NyD3aPTpuFJxABm7pVUT/view?usp=sharing"
@@ -29,6 +33,7 @@ def setup_tables(db: sqlite3.Connection):
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS "cves" (
             "cve_id" TEXT PRIMARY KEY,
+            "calculated_product" TEXT NOT NULL,
             "year" INT NOT NULL,
             "assigner" TEXT,
             "problem_type" TEXT,
@@ -51,13 +56,38 @@ def safe_str_to_float(s: str) -> float | None:
         return None
 
 
+def calculate_probable_product(configurations_string: str) -> Optional[str]:
+    cpe = CpeParser()
+    configurations = ast.literal_eval(configurations_string)
+
+    def parse_cpe(conf: str):
+        res = cpe.parser(conf)
+        vendor = res["vendor"]
+        product = res["product"]
+        return f"{vendor}/{product}"
+
+    products = list(map(parse_cpe, configurations))
+    if len(products) == 0:
+        return None
+    most_common = Counter(products).most_common(1)[0][0]
+    return most_common
+
+
 def read_cve_data(path: str) -> dict[str, dict[str, str | float | None]]:
     with open(path, mode="r", newline="", encoding="utf-8") as file:
         reader = csv.DictReader(file)
         entries = dict()
+        skipped = 0
+        processed = 0
         for row in reader:
+            print(f"\rProcessed {processed} rows...", end="")
+            calculated_product = calculate_probable_product(row["configurations"])
+            if calculated_product is None:
+                skipped += 1
+                continue
             entry = {
                 "cve_id": row["cve_id"],
+                "calculated_product": calculated_product,
                 "assigner": row["assigner"],
                 "problem_type": row["problemtype"],
                 "references": row["references"],
@@ -70,6 +100,14 @@ def read_cve_data(path: str) -> dict[str, dict[str, str | float | None]]:
                 "cve_impact_score": safe_str_to_float(row["cve_impact_score"]),
             }
             entries[row["cve_id"]] = entry
+            processed += 1
+
+        print()
+
+        if skipped > 0:
+            print(
+                f"[WARN] {skipped} cves were skipped due to not having a correct configurations column"
+            )
         return entries
 
 
@@ -85,6 +123,7 @@ def insert_cves(db: sqlite3.Connection, cves: list[dict[str, Any]]):
     query = """
         INSERT INTO "cves" (
             cve_id,
+            calculated_product,
             year,
             assigner,
             problem_type,
@@ -95,8 +134,9 @@ def insert_cves(db: sqlite3.Connection, cves: list[dict[str, Any]]):
             cve_exploitability_score,
             cve_impact_score,
             patch_file
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(cve_id) DO UPDATE SET
+            calculated_product = excluded.calculated_product,
             year = excluded.year,
             assigner = excluded.assigner,
             problem_type = excluded.problem_type,
@@ -111,6 +151,7 @@ def insert_cves(db: sqlite3.Connection, cves: list[dict[str, Any]]):
     values = [
         (
             cve["cve_id"],
+            cve["calculated_product"],
             int(cve["cve_id"].split("-")[1]),
             cve["assigner"],
             cve["problem_type"],
@@ -200,13 +241,14 @@ def main():
     progress = 0
     cves_with_patches = list()
     for cve in patches:
-        print(f"\rProgress {progress}/{total}")
+        print(f"\rProgress {progress}/{total}", end="")
         if cve in cve_data:
             patch_file = patches[cve]
             cve_info = cve_data[cve]
             cves_with_patches.append(
                 {
                     "cve_id": cve_info["cve_id"],
+                    "calculated_product": cve_info["calculated_product"],
                     "assigner": cve_info["assigner"],
                     "problem_type": cve_info["problem_type"],
                     "references": cve_info["references"],
@@ -219,9 +261,10 @@ def main():
                 }
             )
         else:
-            print("Warning: CVE", cve, "not found in the CVE DATA!")
+            print("\rWarning: CVE", cve, "not found in the CVE DATA!")
         progress += 1
 
+    print()
     print(
         f"Saving {len(cves_with_patches)} CVEs with their respective patches into {output_file}"
     )
