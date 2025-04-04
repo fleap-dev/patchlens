@@ -9,6 +9,7 @@
 
 import argparse
 import os
+from os.path import isdir
 import sys
 import sqlite3
 import csv
@@ -199,6 +200,16 @@ def main():
     patches_folder: str = args.patches_folder
     output_file: str = args.output
     dry_run: bool = args.dry_run
+
+    # Check if the default ./data folder is being used.
+    # If so, create it if it does not exist
+    if (
+        cve_data_file.startswith("data/")
+        or patches_folder.startswith("data/")
+        or output_file.startswith("data/")
+    ):
+        if not os.path.isdir("data"):
+            os.mkdir("data")
 
     if not os.path.exists(cve_data_file):
         print("CVE data file not found! Downloading...")
