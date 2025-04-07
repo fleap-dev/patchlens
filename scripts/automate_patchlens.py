@@ -119,7 +119,13 @@ def process_patch(
             check=True,
             stdout=subprocess.PIPE,
         )
-        return proc.stdout.decode("utf-8")
+        try:
+            decoded = proc.stdout.decode("utf-8")
+            return decoded
+        except UnicodeError as error:
+            raise PatchlensError(
+                f"Invalid unicode output from patchlens on {rev}: {error}"
+            )
     except subprocess.CalledProcessError as error:
         raise PatchlensError(f"Error processing commit {rev}: {error}")
 
