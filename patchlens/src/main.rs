@@ -2,7 +2,6 @@ use anyhow::Context;
 use clap::Parser as ClapParser;
 use logical_utils::Flag;
 use std::path::PathBuf;
-use tracing::debug;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use tree_sitter::{Node, Parser};
 
@@ -63,22 +62,6 @@ fn main() -> anyhow::Result<()> {
     let final_flags = Flag::Or(result).simplify();
 
     println!("{final_flags}");
-    //.for_each(|(filename, flag)| {
-    //    match flag {
-    //        Ok(flag) => {
-    //            println!("File {filename} needs {flag} variables to be affected!");
-    //        },
-    //        Err(e) => error!("Error computing flag for file {filename}: {e:?}"),
-    //    }
-    //});
-
-    //let result = Flag::Or(result);
-    //
-    //info!("All affected variants must match the flag: {result}");
-    //info!(
-    //    "All affected variants must match the flag: {}",
-    //    result.simplify()
-    //);
 
     Ok(())
 }
@@ -117,8 +100,6 @@ pub fn analyze_variants_affected(source: &str, filename: &str) -> Flag {
     let root_node = tree.root_node();
 
     let patchlens_ifdef_nodes = find_patchlens_ifdef_nodes(source, root_node);
-
-    debug!("NODES: {patchlens_ifdef_nodes:?}");
 
     let hunk_configs = Flag::Or(
         patchlens_ifdef_nodes
