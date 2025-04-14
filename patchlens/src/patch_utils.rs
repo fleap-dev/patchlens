@@ -35,8 +35,7 @@ pub fn apply_patch_in_memory(directory: &Path, patch_content: &str) -> Result<St
 }
 
 pub fn get_patch_original_file(single_file_patch_src: &str) -> &str {
-    let line = single_file_patch_src.lines().nth(1).unwrap();
-    assert!(line.starts_with("+++"));
+    let line = single_file_patch_src.lines().find(|line| line.starts_with("+++")).unwrap();
     let (_, raw_filename) = line.split_once(" ").unwrap();
     &raw_filename[2..]
 }
