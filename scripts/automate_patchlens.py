@@ -118,6 +118,7 @@ def process_patch(
             cwd=repo_path,
             check=True,
             stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
         try:
             decoded = proc.stdout.decode("utf-8")
@@ -127,7 +128,7 @@ def process_patch(
                 f"Invalid unicode output from patchlens on {rev}: {error}"
             )
     except subprocess.CalledProcessError as error:
-        raise PatchlensError(f"Error processing commit {rev}: {error}")
+        raise PatchlensError(f"Error processing commit {rev}: {error}\nSTDOUT: {error.stdout}\nSTDERR: {error.stderr}")
 
 
 def main():
