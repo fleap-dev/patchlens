@@ -1,4 +1,4 @@
-use anyhow::Context;
+use anyhow::{ensure, Context};
 use clap::Parser as ClapParser;
 use logical_utils::Flag;
 use std::path::PathBuf;
@@ -99,6 +99,9 @@ pub fn analyze_variants_affected(source: &str, filename: &str) -> Flag {
     let tree = parser.parse(source, None).unwrap();
     let root_node = tree.root_node();
 
+    // TODO: how we should handle this?
+    // assert!(!root_node.has_error(), "TreeSitter failed to parse the full source code!");
+
     let patchlens_ifdef_nodes = find_patchlens_ifdef_nodes(source, root_node);
 
     let hunk_configs = Flag::Or(
@@ -152,7 +155,7 @@ fn analyze_configs_for_ast_node(source: &str, node: Node) -> Flag {
                 // Ignored because this will be checked on the parent preproc_ifdef...
             }
             "preproc_if" => {
-                todo!()
+                todo!("preproc_if blocks are not yet implemented!")
             }
             _ => {}
         }
@@ -177,8 +180,8 @@ impl IfdefCommand {
         let s: &str = value.as_ref();
 
         match s {
-            "#ifdef" => Some(Self::Ifdef),
-            "#ifndef" => Some(Self::Ifndef),
+            "ifdef" => Some(Self::Ifdef),
+            "ifndef" => Some(Self::Ifndef),
             _ => None,
         }
     }
@@ -194,18 +197,23 @@ fn parse_ifdef_node<'a>(
         "node is not an ifdef node"
     );
 
-    let macro_cmd = ifdef_node
-        .utf8_text(source.as_bytes())
-        .unwrap()
+    let macro_cmd_source = ifdef_node
+        .utf8_text(source.as_bytes())?
+        .trim();
+
+    ensure!(macro_cmd_source.starts_with("#"), "macro does not start with #");
+
+    let macro_cmd = macro_cmd_source[1..] // Skip the # at the beginning
         .replace("\t", " ")
         .split(" ")
+        .filter(|s| !s.is_empty())
         .next()
         .unwrap()
         .trim()
         .to_lowercase();
 
     let macro_cmd = IfdefCommand::from_str(&macro_cmd)
-        .with_context(|| format!("unknown ifdef command: \"{macro_cmd}\"\n\n{source}\n\n"))?;
+        .with_context(|| format!("unknown ifdef command: \"{macro_cmd}\"\n\n{macro_cmd_source}\n\n"))?;
 
     let condition_name = ifdef_node.named_child(0).unwrap();
     let condition_name = condition_name.utf8_text(source.as_bytes()).unwrap();
