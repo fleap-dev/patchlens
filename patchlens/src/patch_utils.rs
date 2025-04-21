@@ -8,9 +8,12 @@ use tracing::debug;
 
 pub const PATCH_WRAPPER_IFDEF: &str = "__PATCHLENS_INTERNAL_CURRENT_PATCH__";
 
-pub fn apply_patch_in_memory(directory: &Path, patch_content: &str) -> Result<String> {
-    let mut child = Command::new("patch")
-        .arg("-p1")
+pub fn apply_patch_in_memory(directory: &Path, patch_content: &str, strip_dir_prefix: Option<u8>) -> Result<String> {
+    let mut child = Command::new("patch");
+
+    child.arg(format!("-p{}", strip_dir_prefix.unwrap_or(0)));
+
+    let mut child = child
         .arg("-D")
         .arg(PATCH_WRAPPER_IFDEF)
         .arg("-o")
@@ -27,23 +30,29 @@ pub fn apply_patch_in_memory(directory: &Path, patch_content: &str) -> Result<St
 
     let output = child.wait_with_output()?;
 
-    ensure!(output.status.success(), "failed to apply patch");
+    ensure!(output.status.success(), "failed to apply patch: {}", String::from_utf8_lossy(&output.stderr));
 
     let stdout = String::from_utf8(output.stdout)?;
-
-    debug!(
-        "Output from patch: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
 
     Ok(stdout)
 }
 
-pub fn get_patch_original_file(single_file_patch_src: &str) -> &str {
+pub fn get_patch_original_file(single_file_patch_src: &str, strip_dir_prefix: Option<u8>) -> &str {
     let line = single_file_patch_src
         .lines()
         .find(|line| line.starts_with("+++"))
         .unwrap();
-    let (_, raw_filename) = line.split_once(" ").unwrap();
-    &raw_filename[2..]
+
+    let mut filename = line.split(&['\t', ' ']).nth(1).unwrap();
+
+    // Strip n prefix folders from the filename
+    let strip = strip_dir_prefix.unwrap_or(0);
+
+    for _ in 0..strip {
+        if let Some(pos) = filename.find("/") {
+            filename = &filename[pos..];
+        }
+    }
+
+    filename
 }

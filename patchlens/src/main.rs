@@ -1,5 +1,7 @@
+use crate::patch_utils::{apply_patch_in_memory, get_patch_original_file};
+use crate::preprocessor::expand_include_macros;
 use anyhow::{ensure, Context};
-use clap::Parser as ClapParser;
+use clap::{Parser as ClapParser, Subcommand};
 use logical_utils::Flag;
 use std::path::{Path, PathBuf};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -14,14 +16,30 @@ mod preprocessor;
 mod test;
 
 #[derive(ClapParser, Debug)]
-#[command(version, about = "Analyze Git patches to detect the variants affected", long_about = None)]
+#[command(version, about = "Analyze Git patches to detect the variants affected", long_about = None
+)]
 struct Cli {
-    /// The folder where the Git repository is located
-    #[arg()]
-    pub git_directory: PathBuf,
-    /// The patch file to be analyzed
-    #[arg()]
-    pub mail_patch_file: PathBuf,
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// does testing things
+    AnalyzeGit {
+        /// The folder where the Git repository is located
+        #[arg()]
+        git_directory: PathBuf,
+        /// The patch file to be analyzed
+        #[arg()]
+        mail_patch_file: PathBuf,
+    },
+    AnalyzeSingle {
+        #[arg()]
+        root_dir: PathBuf,
+        #[arg()]
+        diff_file: PathBuf,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -32,53 +50,78 @@ fn main() -> anyhow::Result<()> {
 
     let args = Cli::parse();
 
-    let git_repo = args.git_directory;
-    let mail_patch_src = std::fs::read_to_string(&args.mail_patch_file)
-        .context("failed to read the contents of the patch")?;
-
-    // A patch file from `git format-patch` may patch multiple files. Here we split this patch file
-    // into individual patches that only affect one file.
-    let single_file_patches = mail_utils::parse_mail_patch(&mail_patch_src);
-
     let include_dirs = preprocessor::find_platform_default_include_dirs()
         .context("failed to find the default include dirs on this platform")?;
 
-    // TODO: remove unwraps
-    let result = single_file_patches
-        .iter()
-        .map(|patch| {
-            (
-                patch_utils::get_patch_original_file(patch),
-                patch_utils::apply_patch_in_memory(&git_repo, patch)
-                    .context("failed to apply patch"),
-            )
-        })
-        .map(|(filename, patched_source_result)| {
-            (
-                filename,
-                patched_source_result.and_then(|patched_source| {
-                    preprocessor::expand_include_macros(
-                        &patched_source,
-                        Path::new(filename),
-                        &include_dirs,
+    match args.command {
+        Commands::AnalyzeGit {
+            git_directory: git_repo,
+            mail_patch_file,
+        } => {
+            let mail_patch_src = std::fs::read_to_string(&mail_patch_file)
+                .context("failed to read the contents of the patch")?;
+
+            // A patch file from `git format-patch` may patch multiple files. Here we split this patch file
+            // into individual patches that only affect one file.
+            let single_file_patches = mail_utils::parse_mail_patch(&mail_patch_src);
+
+            // TODO: remove unwraps
+            let result = single_file_patches
+                .iter()
+                .map(|patch| {
+                    (
+                        patch_utils::get_patch_original_file(patch, Some(1)),
+                        patch_utils::apply_patch_in_memory(&git_repo, patch, Some(1))
+                            .context("failed to apply patch"),
                     )
-                }),
-            )
-        })
-        .map(|(filename, patched_source_result)| {
-            (
-                filename,
-                patched_source_result
-                    .map(|patched_source| analyze_variants_affected(&patched_source, filename)),
-            )
-        })
-        .map(|(_filename, flag)| flag)
-        .collect::<anyhow::Result<Vec<_>>>()
-        .context("failed to process patch")?;
+                })
+                .map(|(filename, patched_source_result)| {
+                    (
+                        filename,
+                        patched_source_result.and_then(|patched_source| {
+                            preprocessor::expand_include_macros(
+                                &patched_source,
+                                Path::new(filename),
+                                &include_dirs,
+                            )
+                        }),
+                    )
+                })
+                .map(|(filename, patched_source_result)| {
+                    (
+                        filename,
+                        patched_source_result.map(|patched_source| {
+                            analyze_variants_affected(&patched_source, filename)
+                        }),
+                    )
+                })
+                .map(|(_filename, flag)| flag)
+                .collect::<anyhow::Result<Vec<_>>>()
+                .context("failed to process patch")?;
 
-    let final_flags = Flag::Or(result).simplify();
+            let final_flags = Flag::Or(result).simplify();
 
-    println!("{final_flags}");
+            println!("{final_flags}");
+        }
+        Commands::AnalyzeSingle {
+            mut root_dir,
+            diff_file,
+        } => {
+            root_dir = root_dir.canonicalize()?;
+            let patch_content = std::fs::read_to_string(&diff_file)
+                .context("failed to read the contents of the patch")?;
+
+            let patched_file = get_patch_original_file(&patch_content, Some(0));
+            let patched_source = apply_patch_in_memory(&root_dir, &patch_content, Some(0))?;
+
+            let expanded_source =
+                expand_include_macros(&patched_source, Path::new(patched_file), &include_dirs);
+
+            let variants = analyze_variants_affected(&patched_source, patched_file);
+
+            println!("{variants}");
+        }
+    }
 
     Ok(())
 }

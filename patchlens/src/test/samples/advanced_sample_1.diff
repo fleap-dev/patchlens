@@ -1,0 +1,9 @@
+--- src/test/samples/advanced_sample_1.c	2025-04-21 14:27:23.226475288 -0300
++++ src/test/samples/advanced_sample_1.c	2025-04-21 14:28:17.402372018 -0300
+@@ -13,5 +13,6 @@
+         puts("Playing with large buffer size");
+     #else
+         puts("Playing with normal buffer size");
++        puts("Only affect normal buffer size variants!")
+     #endif
+ }
