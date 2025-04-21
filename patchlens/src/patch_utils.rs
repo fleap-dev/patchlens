@@ -1,7 +1,9 @@
-use std::{
-    io::Write, path::Path, process::{Command, Stdio}
-};
 use anyhow::{ensure, Result};
+use std::{
+    io::Write,
+    path::Path,
+    process::{Command, Stdio},
+};
 use tracing::debug;
 
 pub const PATCH_WRAPPER_IFDEF: &str = "__PATCHLENS_INTERNAL_CURRENT_PATCH__";
@@ -29,13 +31,19 @@ pub fn apply_patch_in_memory(directory: &Path, patch_content: &str) -> Result<St
 
     let stdout = String::from_utf8(output.stdout)?;
 
-    debug!("Output from patch: {}", String::from_utf8_lossy(&output.stderr));
+    debug!(
+        "Output from patch: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     Ok(stdout)
 }
 
 pub fn get_patch_original_file(single_file_patch_src: &str) -> &str {
-    let line = single_file_patch_src.lines().find(|line| line.starts_with("+++")).unwrap();
+    let line = single_file_patch_src
+        .lines()
+        .find(|line| line.starts_with("+++"))
+        .unwrap();
     let (_, raw_filename) = line.split_once(" ").unwrap();
     &raw_filename[2..]
 }
