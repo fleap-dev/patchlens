@@ -1,13 +1,15 @@
 use anyhow::{ensure, Context};
 use clap::Parser as ClapParser;
 use logical_utils::Flag;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use tree_sitter::{Node, Parser};
 
 mod logical_utils;
 mod mail_utils;
 mod patch_utils;
+mod preprocessor;
+
 #[cfg(test)]
 mod test;
 
@@ -38,6 +40,9 @@ fn main() -> anyhow::Result<()> {
     // into individual patches that only affect one file.
     let single_file_patches = mail_utils::parse_mail_patch(&mail_patch_src);
 
+    let include_dirs = preprocessor::find_platform_default_include_dirs()
+        .context("failed to find the default include dirs on this platform")?;
+
     // TODO: remove unwraps
     let result = single_file_patches
         .iter()
@@ -46,6 +51,18 @@ fn main() -> anyhow::Result<()> {
                 patch_utils::get_patch_original_file(patch),
                 patch_utils::apply_patch_in_memory(&git_repo, patch)
                     .context("failed to apply patch"),
+            )
+        })
+        .map(|(filename, patched_source_result)| {
+            (
+                filename,
+                patched_source_result.and_then(|patched_source| {
+                    preprocessor::expand_include_macros(
+                        &patched_source,
+                        Path::new(filename),
+                        &include_dirs,
+                    )
+                }),
             )
         })
         .map(|(filename, patched_source_result)| {
@@ -197,23 +214,24 @@ fn parse_ifdef_node<'a>(
         "node is not an ifdef node"
     );
 
-    let macro_cmd_source = ifdef_node
-        .utf8_text(source.as_bytes())?
-        .trim();
+    let macro_cmd_source = ifdef_node.utf8_text(source.as_bytes())?.trim();
 
-    ensure!(macro_cmd_source.starts_with("#"), "macro does not start with #");
+    ensure!(
+        macro_cmd_source.starts_with("#"),
+        "macro does not start with #"
+    );
 
     let macro_cmd = macro_cmd_source[1..] // Skip the # at the beginning
         .replace("\t", " ")
         .split(" ")
-        .filter(|s| !s.is_empty())
-        .next()
+        .find(|s| !s.is_empty())
         .unwrap()
         .trim()
         .to_lowercase();
 
-    let macro_cmd = IfdefCommand::from_str(&macro_cmd)
-        .with_context(|| format!("unknown ifdef command: \"{macro_cmd}\"\n\n{macro_cmd_source}\n\n"))?;
+    let macro_cmd = IfdefCommand::from_str(&macro_cmd).with_context(|| {
+        format!("unknown ifdef command: \"{macro_cmd}\"\n\n{macro_cmd_source}\n\n")
+    })?;
 
     let condition_name = ifdef_node.named_child(0).unwrap();
     let condition_name = condition_name.utf8_text(source.as_bytes()).unwrap();
