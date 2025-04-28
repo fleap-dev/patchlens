@@ -8,6 +8,7 @@ cc = "*"
 
 [dependencies]
 anyhow = "1.0.97"
+derive_builder = "0.20.2"
 diffy = "0.4.0"
 mail-parser = "0.10.2"
 patch = "0.7.0"

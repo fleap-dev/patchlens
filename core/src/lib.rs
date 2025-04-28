@@ -85,11 +85,11 @@ pub fn analyze_configs_for_ast_node(source: &str, node: Node) -> Flag {
 
                 let flag: Flag = match (macro_cmd.as_str(), last_kind) {
                     ("#ifdef", Some("preproc_else")) => {
-                        Flag::Not(Box::new(Flag::Literal(raw_flag)))
+                        Flag::Not(Box::new(Flag::Defined(raw_flag)))
                     }
-                    ("#ifndef", Some("preproc_else")) => Flag::Literal(raw_flag),
-                    ("#ifdef", _) => Flag::Literal(raw_flag),
-                    ("#ifndef", _) => Flag::Not(Box::new(Flag::Literal(raw_flag))),
+                    ("#ifndef", Some("preproc_else")) => Flag::Defined(raw_flag),
+                    ("#ifdef", _) => Flag::Defined(raw_flag),
+                    ("#ifndef", _) => Flag::Not(Box::new(Flag::Defined(raw_flag))),
                     _ => unreachable!(),
                 };
 
