@@ -1,0 +1,10 @@
+[package]
+name = "cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+patchlens = { path = "../core", package = "core" }
+tracing-subscriber = { version = "0.3.19", features = ["fmt", "env-filter"] }
+clap = { version = "4.5.29", features = ["derive"] }
+anyhow = "1.0.98"

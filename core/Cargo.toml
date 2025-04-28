@@ -1,5 +1,5 @@
 [package]
-name = "patchlens"
+name = "core"
 version = "0.1.0"
 edition = "2021"
 
@@ -8,13 +8,11 @@ cc = "*"
 
 [dependencies]
 anyhow = "1.0.97"
-clap = { version = "4.5.29", features = ["derive"] }
 diffy = "0.4.0"
 mail-parser = "0.10.2"
 patch = "0.7.0"
 regex = "1.11.1"
 tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["fmt", "env-filter"] }
 tree-sitter = "0.24.4"
 tree-sitter-c = "0.23.2"
 
