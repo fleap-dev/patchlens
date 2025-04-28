@@ -1,9 +1,9 @@
-use std::path::{Path, PathBuf};
 use anyhow::Context;
-use patchlens::{analyze_variants_affected, mail_utils, patch_utils, preprocessor};
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use clap::{Parser as ClapParser, Subcommand};
 use patchlens::logical_utils::Flag;
+use patchlens::{analyze_variants_affected, mail_utils, patch_utils, preprocessor};
+use std::path::{Path, PathBuf};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 #[derive(ClapParser, Debug)]
 #[command(version, about = "Analyze Git patches to detect the variants affected", long_about = None
@@ -102,10 +102,14 @@ fn main() -> anyhow::Result<()> {
                 .context("failed to read the contents of the patch")?;
 
             let patched_file = patch_utils::get_patch_original_file(&patch_content, Some(0));
-            let patched_source = patch_utils::apply_patch_in_memory(&root_dir, &patch_content, Some(0))?;
+            let patched_source =
+                patch_utils::apply_patch_in_memory(&root_dir, &patch_content, Some(0))?;
 
-            let expanded_source =
-                preprocessor::expand_include_macros(&patched_source, Path::new(patched_file), &include_dirs)?;
+            let expanded_source = preprocessor::expand_include_macros(
+                &patched_source,
+                Path::new(patched_file),
+                &include_dirs,
+            )?;
 
             let variants = analyze_variants_affected(&expanded_source, patched_file);
 

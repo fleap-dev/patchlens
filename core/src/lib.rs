@@ -1,5 +1,3 @@
-use crate::patch_utils::{apply_patch_in_memory, get_patch_original_file};
-use crate::preprocessor::expand_include_macros;
 use anyhow::{ensure, Context};
 use logical_utils::Flag;
 use tree_sitter::{Node, Parser};
@@ -11,7 +9,6 @@ pub mod preprocessor;
 
 #[cfg(test)]
 mod test;
-
 
 pub fn find_patchlens_ifdef_nodes<'a>(source: &'a str, root: Node<'a>) -> Vec<Node<'a>> {
     fn recursive<'a>(source: &str, node: Node<'a>, output: &mut Vec<Node<'a>>) {

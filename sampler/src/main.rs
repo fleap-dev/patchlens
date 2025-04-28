@@ -1,15 +1,15 @@
 mod sampling_algorithm;
 
+use itertools::Itertools;
+use regex::Regex;
+use sampling_algorithm::*;
 use std::collections::HashSet;
 use std::env::args;
 use std::fs::File;
 use std::io;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use itertools::Itertools;
-use regex::Regex;
 use walkdir::WalkDir;
-use sampling_algorithm::*;
 
 fn find_linux_configs<P: AsRef<Path>>(root: P) -> io::Result<HashSet<String>> {
     let root = root.as_ref();
@@ -47,13 +47,11 @@ fn find_linux_configs<P: AsRef<Path>>(root: P) -> io::Result<HashSet<String>> {
     Ok(options)
 }
 
-fn solve(enabled_configs: &[&str], flag: ()) {
-    
-}
+fn solve(enabled_configs: &[&str], flag: ()) {}
 
 fn main() {
     let args = args().skip(1).collect::<Vec<_>>();
-    
+
     // let options = vec!["A".into(), "B".into(), "C".into()];
     let options = find_linux_configs(args.first().expect("missing linux path"))
         .expect("failed to get linux configs")

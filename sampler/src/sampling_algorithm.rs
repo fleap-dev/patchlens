@@ -1,26 +1,20 @@
+use itertools::Itertools;
 use rand::prelude::*;
 use std::collections::HashSet;
 use std::fmt::Debug;
-use itertools::Itertools;
 
 /// A sampling algorithm: given a slice of option-names, produce
 /// an iterator over all chosen configurations (each config is a
 /// Vec of enabled option names).
 pub trait SamplingAlgorithm: Debug {
-    fn sample<'a>(
-        &self,
-        options: &'a [String],
-    ) -> Box<dyn Iterator<Item = Vec<String>> + 'a>;
+    fn sample<'a>(&self, options: &'a [String]) -> Box<dyn Iterator<Item = Vec<String>> + 'a>;
 }
 
 /// 1) Most-enabled-disabled: all on, then none on.
 #[derive(Debug)]
 pub struct MostEnabledDisabled;
 impl SamplingAlgorithm for MostEnabledDisabled {
-    fn sample<'a>(
-        &self,
-        options: &'a [String],
-    ) -> Box<dyn Iterator<Item = Vec<String>> + 'a> {
+    fn sample<'a>(&self, options: &'a [String]) -> Box<dyn Iterator<Item = Vec<String>> + 'a> {
         let all = options.to_vec();
         let none = Vec::new();
         Box::new(vec![all, none].into_iter())
@@ -31,10 +25,7 @@ impl SamplingAlgorithm for MostEnabledDisabled {
 #[derive(Debug)]
 pub struct OneDisabled;
 impl SamplingAlgorithm for OneDisabled {
-    fn sample<'a>(
-        &self,
-        options: &'a [String],
-    ) -> Box<dyn Iterator<Item = Vec<String>> + 'a> {
+    fn sample<'a>(&self, options: &'a [String]) -> Box<dyn Iterator<Item = Vec<String>> + 'a> {
         let configs = options
             .iter()
             .map(|disabled| {
@@ -53,10 +44,7 @@ impl SamplingAlgorithm for OneDisabled {
 #[derive(Debug)]
 pub struct OneEnabled;
 impl SamplingAlgorithm for OneEnabled {
-    fn sample<'a>(
-        &self,
-        options: &'a [String],
-    ) -> Box<dyn Iterator<Item = Vec<String>> + 'a> {
+    fn sample<'a>(&self, options: &'a [String]) -> Box<dyn Iterator<Item = Vec<String>> + 'a> {
         let configs = options
             .iter()
             .map(|opt| vec![opt.clone()])
@@ -69,11 +57,11 @@ impl SamplingAlgorithm for OneEnabled {
 #[derive(Debug)]
 pub struct StatementCoverage;
 impl SamplingAlgorithm for StatementCoverage {
-    fn sample<'a>(
-        &self,
-        options: &'a [String],
-    ) -> Box<dyn Iterator<Item = Vec<String>> + 'a> {
-        let mut configs = options.iter().map(|opt| vec![opt.clone()]).collect::<Vec<_>>();
+    fn sample<'a>(&self, options: &'a [String]) -> Box<dyn Iterator<Item = Vec<String>> + 'a> {
+        let mut configs = options
+            .iter()
+            .map(|opt| vec![opt.clone()])
+            .collect::<Vec<_>>();
         configs.push(Vec::new());
         Box::new(configs.into_iter())
     }
@@ -85,10 +73,7 @@ pub struct RandomSampling {
     pub n: usize,
 }
 impl SamplingAlgorithm for RandomSampling {
-    fn sample<'a>(
-        &self,
-        options: &'a [String],
-    ) -> Box<dyn Iterator<Item = Vec<String>> + 'a> {
+    fn sample<'a>(&self, options: &'a [String]) -> Box<dyn Iterator<Item = Vec<String>> + 'a> {
         Box::new(RandomSampler::new(options, self.n))
     }
 }
@@ -140,10 +125,7 @@ pub struct TWiseGreedy {
     pub default: bool,
 }
 impl SamplingAlgorithm for TWiseGreedy {
-    fn sample<'a>(
-        &self,
-        options: &'a [String],
-    ) -> Box<dyn Iterator<Item = Vec<String>> + 'a> {
+    fn sample<'a>(&self, options: &'a [String]) -> Box<dyn Iterator<Item = Vec<String>> + 'a> {
         // Build all (subset, assignment) combos.
         // subset: Vec<usize> indices of options; assignment: Vec<bool> of length t.
         let mut combos = Vec::new();
@@ -186,8 +168,7 @@ impl Iterator for TWiseGreedySampler {
         }
         // Remove all combos covered by this config
         self.combos.retain(|(s, a)| {
-            !s
-                .iter()
+            !s.iter()
                 .zip(a.iter())
                 .all(|(&opt_idx, &val)| config[opt_idx] == val)
         });
