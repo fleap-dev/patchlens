@@ -1,4 +1,4 @@
-use anyhow::Context;
+use anyhow::{bail, Context};
 use clap::{Parser as ClapParser, Subcommand};
 use patchlens::logical_utils::Flag;
 use patchlens::{analyze_variants_affected, mail_utils, patch_utils, preprocessor};
@@ -54,6 +54,17 @@ fn main() -> anyhow::Result<()> {
             // A patch file from `git format-patch` may patch multiple files. Here we split this patch file
             // into individual patches that only affect one file.
             let single_file_patches = mail_utils::parse_mail_patch(&mail_patch_src);
+
+            // Verify if the patch file only modify .c files
+            // If the patch modify something else, we cannot be certain about its effects
+            single_file_patches.iter()
+                .map(|patch| patch_utils::get_patch_original_file(patch, Some(1)))
+                .map(|filename| match Path::new(filename).extension().and_then(std::ffi::OsStr::to_str) {
+                    Some("c") => Ok(filename),
+                    Some(_) | None => bail!("this patch modifies a file that is not a c file: {}", filename),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+                
 
             // TODO: remove unwraps
             let result = single_file_patches
