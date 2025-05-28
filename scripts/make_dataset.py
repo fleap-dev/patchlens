@@ -12,6 +12,7 @@ import csv
 import gzip
 import json
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -32,6 +33,14 @@ CVE_DATA_DRIVE_URL = (
 )
 PATCHDB_DRIVE_URL = (
     "https://drive.google.com/file/d/1gJQd5Kk6kI0z71D7HUaxM5KzbyWmmqwQ/view?usp=sharing"
+)
+
+GITHUB_COMMIT_REGEX = re.compile(
+    r"^https?://github\.com/"  # protocol + domain
+    r"[^/]+/"  # owner (one or more non-slashes)
+    r"[^/]+/"  # repo
+    r"commit/"
+    r"(?P<hash>[0-9a-f]{40})$"  # exactly 40 lowercase hex chars
 )
 
 
@@ -100,7 +109,6 @@ def read_patch_db(path: str) -> list[Patch]:
     for filename in os.listdir(path):
         cve, _, _ = filename.rpartition("-")
         id = filename[(len(cve) + 1) : -4]
-        print(id)
         patches.append(
             Patch(
                 id=id,
@@ -135,13 +143,13 @@ def upsert_patches(
         db.commit()
     elif source == "github":
         query = """
-            INSERT INTO "cves" (
+            INSERT INTO "patches" (
                 id,
                 source,
                 cve_id,
                 github_patch_url
             ) VALUES (?, ?, ?, ?)
-            ON CONFLICT(cve_id) DO UPDATE SET
+            ON CONFLICT(id) DO UPDATE SET
                 cve_id = excluded.cve_id,
                 source = excluded.source,
                 github_patch_url = excluded.github_patch_url;
@@ -220,7 +228,12 @@ def download_nvd_data(cve_data_folder):
                     shutil.copyfileobj(gz, f)
 
 
-def collect_cve_data(cve_data_folder, year) -> list[dict[str, Any]]:
+def extract_github_commit_hash(url: str) -> str | None:
+    m = GITHUB_COMMIT_REGEX.match(url)
+    return m.group("hash") if m else None
+
+
+def collect_cve_data(cve_data_folder, year) -> tuple[list[dict[str, Any]], list[Patch]]:
     """
     Collect the CVE data from the NVD data.
     """
@@ -239,6 +252,7 @@ def collect_cve_data(cve_data_folder, year) -> list[dict[str, Any]]:
     cves = data["CVE_Items"]
 
     entries = []
+    patches = []
     skipped = 0
     processed = 0
     for row in cves:
@@ -288,6 +302,21 @@ def collect_cve_data(cve_data_folder, year) -> list[dict[str, Any]]:
                 )
             ),
         }
+
+        for ref in row["cve"]["references"]["reference_data"]:
+            url = ref["url"]
+            if "patch" in list(map(lambda x: x.lower(), ref["tags"])):
+                commit = extract_github_commit_hash(url)
+                if commit is not None:
+                    patches.append(
+                        Patch(
+                            id=commit,
+                            cve_id=entry["cve_id"],
+                            github_patch_url=url,
+                            patch_file=None,
+                        )
+                    )
+
         entries.append(entry)
         processed += 1
 
@@ -298,7 +327,7 @@ def collect_cve_data(cve_data_folder, year) -> list[dict[str, Any]]:
             f"[WARN] {skipped} cves were skipped due to not having a correct configurations column"
         )
 
-    return entries
+    return (entries, patches)
 
 
 def main():
@@ -347,8 +376,9 @@ def main():
     setup_tables(db)
 
     for year in range(2002, datetime.now().year + 1):
-        cves = collect_cve_data(cve_data_folder, year)
+        cves, patches = collect_cve_data(cve_data_folder, year)
         upsert_cves(db, cves)
+        upsert_patches(db, patches, "github")
 
     if not os.path.exists(patches_folder):
         print("Patches folder not found! Downloading patchdb archive...")
