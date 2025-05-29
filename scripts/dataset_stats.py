@@ -8,6 +8,51 @@
 import argparse
 import os
 import sqlite3
+from typing import Any, Sequence
+
+
+def format_matrix(matrix: Sequence[Sequence[Any]], padding: int = 1) -> str:
+    """
+    Returns a formatted string of the matrix with ASCII borders and aligned columns.
+
+    Args:
+        matrix: A sequence of sequences representing rows of the matrix.
+        padding: Number of spaces to add on each side of a cell.
+
+    Returns:
+        A single string containing the entire bordered table.
+    """
+    if not matrix:
+        return "<empty matrix>"
+
+    # Determine number of columns
+    num_cols = max(len(row) for row in matrix)
+    # Compute maximum width for each column
+    col_widths = [0] * num_cols
+    for row in matrix:
+        for idx in range(num_cols):
+            cell = str(row[idx]) if idx < len(row) else ""
+            col_widths[idx] = max(col_widths[idx], len(cell))
+
+    # Helper to create a border line
+    def make_border() -> str:
+        parts = ["+" + "-" * (col_widths[i] + 2 * padding) for i in range(num_cols)]
+        return "".join(parts) + "+"
+
+    # Build all lines
+    lines = []
+    top_border = make_border()
+    lines.append("  " + top_border)
+    for row in matrix:
+        row_cells = []
+        for idx in range(num_cols):
+            cell = str(row[idx]) if idx < len(row) else ""
+            content = " " * padding + cell.ljust(col_widths[idx]) + " " * padding
+            row_cells.append("|" + content)
+        lines.append("  " + "".join(row_cells) + "|")
+        lines.append("  " + make_border())
+
+    return "\n".join(lines)
 
 
 def cve_count(db: sqlite3.Connection) -> str:
@@ -49,18 +94,18 @@ def patch_ref_count_distrib(db: sqlite3.Connection) -> str:
         GROUP BY
             reference_count
         ORDER BY
-            cve_count DESC;
+            reference_count;
     """
 
     cursor = db.cursor()
     cursor.execute(query)
 
-    output = "\n"
+    matrix = [["Number of patch refs", "Number of CVEs"]]
 
     for ref_count, cve_count in cursor.fetchall():
-        output += f"  - {cve_count} with {ref_count} refs\n"
+        matrix.append([f"{ref_count}", f"{cve_count}"])
 
-    return output
+    return "\n" + format_matrix(matrix)
 
 
 def patch_count(db: sqlite3.Connection) -> str:
@@ -90,12 +135,12 @@ def most_common_products(db: sqlite3.Connection) -> str:
     cursor = db.cursor()
     cursor.execute(query)
 
-    output = "\n"
+    matrix = [["Product", "Number of patches"]]
 
     for value, freq in cursor.fetchall():
-        output += f" - {value}: {freq}\n"
+        matrix.append([f"{value}", f"{freq}"])
 
-    return output
+    return "\n" + format_matrix(matrix)
 
 
 def github_ref_patch_count(db: sqlite3.Connection) -> str:
