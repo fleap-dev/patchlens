@@ -101,7 +101,7 @@ class ExpressionSimplifier:
 def main():
     parser = argparse.ArgumentParser(description="Boolean expression simplifier using Z3")
     parser.add_argument("--expr", type=str, required=True, help="Boolean expression in Python syntax (e.g., '(A | B) & C')")
-    parser.add_argument("--output", type=str, default="simplified_expression.json", help="Output file for the simplified expression")
+    parser.add_argument("--output", type=str, help="Output file for the simplified expression")
     args = parser.parse_args()
     expr_str = args.expr
     output_file = args.output
@@ -116,14 +116,15 @@ def main():
 
     print(simplified_str)
 
-    output = {
-        "original": expr_str,
-        "simplified": simplified_str,
-        "variables": sorted(simplifier.z3_vars.keys())
-    }
-    # Write output to JSON file
-    with open(output_file, "w") as f:
-        json.dump(output, f, indent=4)
+    if output_file:
+        output = {
+            "original": expr_str,
+            "simplified": simplified_str,
+            "variables": sorted(simplifier.z3_vars.keys())
+        }
+        # Write output to JSON file
+        with open(output_file, "w") as f:
+            json.dump(output, f, indent=4)
 
 
 
