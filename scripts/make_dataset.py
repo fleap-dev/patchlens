@@ -66,7 +66,8 @@ def setup_tables(db: sqlite3.Connection):
             "configurations" TEXT,
             "severity" TEXT,
             "cve_exploitability_score" REAL,
-            "cve_impact_score" REAL
+            "cve_impact_score" REAL,
+            "patch_ref_count" INT NOT NULL DEFAULT 0
         )
     """)
     cursor.execute("""
@@ -175,8 +176,9 @@ def upsert_cves(db: sqlite3.Connection, cves: list[dict[str, Any]]):
             configurations,
             severity,
             cve_exploitability_score,
-            cve_impact_score
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            cve_impact_score,
+            patch_ref_count
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(cve_id) DO UPDATE SET
             calculated_product = excluded.calculated_product,
             year = excluded.year,
@@ -187,7 +189,8 @@ def upsert_cves(db: sqlite3.Connection, cves: list[dict[str, Any]]):
             configurations = excluded.configurations,
             severity = excluded.severity,
             cve_exploitability_score = excluded.cve_exploitability_score,
-            cve_impact_score = excluded.cve_impact_score;
+            cve_impact_score = excluded.cve_impact_score,
+            patch_ref_count = excluded.patch_ref_count;
     """
     values = [
         (
@@ -202,6 +205,7 @@ def upsert_cves(db: sqlite3.Connection, cves: list[dict[str, Any]]):
             cve["severity"],
             cve["cve_exploitability_score"],
             cve["cve_impact_score"],
+            cve["patch_ref_count"],
         )
         for cve in cves
     ]
@@ -301,14 +305,16 @@ def collect_cve_data(cve_data_folder, year) -> tuple[list[dict[str, Any]], list[
                     else None
                 )
             ),
+            "patch_ref_count": 0,
         }
-
+        cve_patches = []
         for ref in row["cve"]["references"]["reference_data"]:
             url = ref["url"]
             if "patch" in list(map(lambda x: x.lower(), ref["tags"])):
+                entry["patch_ref_count"] += 1
                 commit = extract_github_commit_hash(url)
                 if commit is not None:
-                    patches.append(
+                    cve_patches.append(
                         Patch(
                             id=commit,
                             cve_id=entry["cve_id"],
@@ -316,6 +322,7 @@ def collect_cve_data(cve_data_folder, year) -> tuple[list[dict[str, Any]], list[
                             patch_file=None,
                         )
                     )
+        patches.extend(cve_patches)
 
         entries.append(entry)
         processed += 1
