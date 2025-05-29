@@ -107,7 +107,7 @@ def main():
     output_file = args.output
     if not expr_str:
         raise ValueError("Expression string cannot be empty")
-    if not output_file.endswith(".json"):
+    if output_file and not output_file.endswith(".json"):
         raise ValueError("Output file must have a .json extension")
 
     # Parse and simplify
