@@ -1,4 +1,4 @@
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use clap::{Parser as ClapParser, Subcommand};
 use patchlens::logical_utils::Flag;
 use patchlens::{analyze_variants_affected, mail_utils, patch_utils, preprocessor};
@@ -57,14 +57,23 @@ fn main() -> anyhow::Result<()> {
 
             // Verify if the patch file only modify .c files
             // If the patch modify something else, we cannot be certain about its effects
-            single_file_patches.iter()
+            single_file_patches
+                .iter()
                 .map(|patch| patch_utils::get_patch_original_file(patch, Some(1)))
-                .map(|filename| match Path::new(filename).extension().and_then(std::ffi::OsStr::to_str) {
-                    Some("c") => Ok(filename),
-                    Some(_) | None => bail!("this patch modifies a file that is not a c file: {}", filename),
+                .map(|filename| {
+                    match Path::new(filename)
+                        .extension()
+                        .and_then(std::ffi::OsStr::to_str)
+                    {
+                        Some("c") => Ok(filename),
+                        Some("h") => Ok(filename),
+                        Some(_) | None => bail!(
+                            "this patch modifies a file that is not a c file: {}",
+                            filename
+                        ),
+                    }
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-                
 
             // TODO: remove unwraps
             let result = single_file_patches
