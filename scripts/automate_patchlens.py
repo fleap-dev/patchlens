@@ -6,6 +6,9 @@
 # ]
 # ///
 
+from datetime import datetime
+import random
+import string
 import requests
 import argparse
 import os
@@ -51,7 +54,7 @@ def setup_tables(db: sqlite3.Connection):
     cursor = db.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS "flags" (
-            "run_id" TEXT NOT NULL,
+            "run_started_at" DATETIME NOT NULL,
             "patchlens_version" TEXT NOT NULL,
             "patch_id" TEXT NOT NULL REFERENCES "patches"("id"),
             "status" TEXT NOT NULL,
@@ -63,11 +66,11 @@ def setup_tables(db: sqlite3.Connection):
 
 
 def insert_flags(
-    db: sqlite3.Connection, flags: List[FlagRow], run_id: str, patchlens_version: str
+    db: sqlite3.Connection, flags: List[FlagRow], run_started_at: datetime, patchlens_version: str
 ):
     query = """
         INSERT INTO "flags" (
-            "run_id",
+            "run_started_at",
             "patchlens_version",
             "patch_id",
             "status",
@@ -78,7 +81,7 @@ def insert_flags(
     db.executemany(
         query,
         [
-            (run_id, patchlens_version, f.patch_id, f.status, f.flag, f.error)
+            (run_started_at.isoformat(), patchlens_version, f.patch_id, f.status, f.flag, f.error)
             for f in flags
         ],
     )
@@ -226,10 +229,6 @@ def process_patch(
         )
 
 
-def generate_run_id():
-    return str(uuid.uuid4())
-
-
 def get_patchlens_version(patchlens_executable):
     command = [patchlens_executable, "--version"]
     proc = subprocess.run(
@@ -318,7 +317,7 @@ def main():
     print(f"Found {len(patches)} CVEs for product {product}!")
 
     patchlens_version = get_patchlens_version(custom_patchlens_path)
-    run_id = generate_run_id()
+    run_started_at = datetime.now()
 
     processed_count = 0
     total = len(patches)
@@ -330,14 +329,14 @@ def main():
 
             # Ensure the result does not contain any newline to avoid corrupting the CSV structure
             result = result.replace("\n", "").replace("\r", "")
-            insert_flags(db, [FlagRow(patch_id=patch.patch_id, status="ok", flag=result, error=None)], run_id, patchlens_version)
+            insert_flags(db, [FlagRow(patch_id=patch.patch_id, status="ok", flag=result, error=None)], run_started_at, patchlens_version)
             print(f"\r[FLAGS] {patch.patch_id} = {result}")
         except CheckoutError as error:
             print(f"\r[ERROR] Checkout error for {patch.patch_id}: {error}")
-            insert_flags(db, [FlagRow(patch_id=patch.patch_id, status="CheckoutError", flag=None, error=error.__str__())], run_id, patchlens_version)
+            insert_flags(db, [FlagRow(patch_id=patch.patch_id, status="CheckoutError", flag=None, error=error.__str__())], run_started_at, patchlens_version)
         except PatchlensError as error:
             print(f"\r[ERROR] Patchlens failed on {patch.patch_id}: {error}")
-            insert_flags(db, [FlagRow(patch_id=patch.patch_id, status="PatchlensError", flag=None, error=error.__str__())], run_id, patchlens_version)
+            insert_flags(db, [FlagRow(patch_id=patch.patch_id, status="PatchlensError", flag=None, error=error.__str__())], run_started_at, patchlens_version)
         finally:
             processed_count += 1
 
