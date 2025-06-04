@@ -48,6 +48,10 @@ pub fn analyze_variants_affected(source: &str, filename: &str) -> Flag {
 
     let patchlens_ifdef_nodes = find_patchlens_ifdef_nodes(source, root_node);
 
+    if patchlens_ifdef_nodes.is_empty() {
+        return Flag::Building(filename.to_owned());
+    }
+
     let hunk_configs = Flag::Or(
         patchlens_ifdef_nodes
             .into_iter()
