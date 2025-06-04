@@ -157,7 +157,7 @@ def get_patches(db: sqlite3.Connection, product: str) -> list[PatchRow]:
     return rows
 
 def download_patch_from_github(url: str, output_path: str) -> str:
-    response = requests.get(url)
+    response = requests.get(url + ".patch")
     if response.status_code != 200:
         raise ValueError(f"Failed to download patch from {url}")
     with open(output_path, "wb") as f:
@@ -205,7 +205,7 @@ def process_patch(
 
     try:
         # Run your custom command on the checked-out commit
-        command = [patchlens_executable, repo_path, patch_file]
+        command = [patchlens_executable, "analyze-git", repo_path, patch_file]
         proc = subprocess.run(
             command,  # Command to run (as a string)
             cwd=repo_path,
