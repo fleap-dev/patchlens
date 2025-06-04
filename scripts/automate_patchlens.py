@@ -2,24 +2,87 @@
 # /// script
 # requires-python = ">=3.13"
 # dependencies = [
+#     "requests",
 # ]
 # ///
 
+import requests
 import argparse
 import os
-import csv
 import re
-import subprocess
-from dataclasses import dataclass
 import sqlite3
-from typing import Tuple, List, Optional
+import subprocess
+import uuid
+from dataclasses import dataclass
+from typing import List, Literal, Optional, Tuple
 
 
 @dataclass
-class CveRow:
+class PatchRow:
+    patch_id: str
     cve_id: str
     configurations: str
-    patch_file: str
+    source: Literal["github", "patchdb"]
+    patch_file: str | None
+    github_patch_url: str | None
+
+
+@dataclass
+class FlagRow:
+    patch_id: str
+    status: Literal["ok", "CheckoutError", "PatchlensError"]
+    flag: str | None
+    error: str | None
+
+
+class CheckoutError(Exception):
+    """Raised when the git checkout command fails."""
+
+    pass
+
+
+class PatchlensError(Exception):
+    """Raised when the patchlens tool fails."""
+
+    pass
+
+
+def setup_tables(db: sqlite3.Connection):
+    cursor = db.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS "flags" (
+            "run_id" TEXT NOT NULL,
+            "patchlens_version" TEXT NOT NULL,
+            "patch_id" TEXT NOT NULL REFERENCES "patches"("id"),
+            "status" TEXT NOT NULL,
+            "flag" TEXT,
+            "error" TEXT
+        )
+    """)
+    db.commit()
+
+
+def insert_flags(
+    db: sqlite3.Connection, flags: List[FlagRow], run_id: str, patchlens_version: str
+):
+    query = """
+        INSERT INTO "flags" (
+            "run_id",
+            "patchlens_version",
+            "patch_id",
+            "status",
+            "flag",
+            "error"
+        ) VALUES (?, ?, ?, ?, ?, ?)
+    """
+    db.executemany(
+        query,
+        [
+            (run_id, patchlens_version, f.patch_id, f.status, f.flag, f.error)
+            for f in flags
+        ],
+    )
+    db.commit()
 
 
 def get_patch_info(patch_file_path: str) -> Tuple[Optional[str], List[str]]:
@@ -59,37 +122,67 @@ def get_patch_info(patch_file_path: str) -> Tuple[Optional[str], List[str]]:
     return commit_revision, modified_files
 
 
-def get_cves(db: sqlite3.Connection, product: str) -> list[CveRow]:
+def get_patches(db: sqlite3.Connection, product: str) -> list[PatchRow]:
     cursor = db.cursor()
     cursor.execute(
         """
-           SELECT "cve_id", "configurations", "patch_file" FROM "cves" WHERE "calculated_product" = ? ORDER BY "year" DESC
+           SELECT
+                "patches"."id",
+                "patches"."cve_id",
+                "cves"."configurations",
+                "patches"."source",
+                "patches"."github_patch_url",
+                "patches"."patch_file"
+            FROM "patches"
+            JOIN "cves" ON "cves"."cve_id" = "patches"."cve_id"
+            WHERE
+                "calculated_product" = ?
+            ORDER BY "cves"."year" DESC
         """,
         [product],
     )
     results = cursor.fetchall()
     rows = []
     for row in results:
-        rows.append(CveRow(row[0], row[1], row[2]))
+        rows.append(
+            PatchRow(
+                patch_id=row[0],
+                cve_id=row[1],
+                configurations=row[2],
+                source=row[3],
+                github_patch_url=row[4],
+                patch_file=row[5],
+            )
+        )
     return rows
 
-
-class CheckoutError(Exception):
-    """Raised when the git checkout command fails."""
-
-    pass
-
-
-class PatchlensError(Exception):
-    """Raised when the patchlens tool fails."""
-
-    pass
+def download_patch_from_github(url: str, output_path: str) -> str:
+    response = requests.get(url)
+    if response.status_code != 200:
+        raise ValueError(f"Failed to download patch from {url}")
+    with open(output_path, "wb") as f:
+        f.write(response.content)
+    return output_path
 
 
 def process_patch(
-    repo_path: str, cve_info: CveRow, patches_folder: str, patchlens_executable: str
+    repo_path: str, cve_info: PatchRow, patches_folder: str, patchlens_executable: str
 ) -> str:
-    patch_file = os.path.join(patches_folder, cve_info.patch_file)
+    patch_file = cve_info.patch_file
+
+    if cve_info.patch_file is not None:
+        patch_file = os.path.join(patches_folder, cve_info.patch_file)
+    else:
+        if cve_info.github_patch_url is None:
+            raise ValueError("No patch file or github URL provided")
+        github_patches_folder = os.path.join(patches_folder, "github")
+        if not os.path.isdir(github_patches_folder):
+            os.makedirs(github_patches_folder)
+        patch_file = download_patch_from_github(
+            cve_info.github_patch_url,
+            os.path.join(github_patches_folder, cve_info.cve_id + ".txt")
+        )
+
     rev, _ = get_patch_info(patch_file)
     try:
         # Checkout the commit in the repository
@@ -128,7 +221,28 @@ def process_patch(
                 f"Invalid unicode output from patchlens on {rev}: {error}"
             )
     except subprocess.CalledProcessError as error:
-        raise PatchlensError(f"Error processing commit {rev}: {error}\nSTDOUT: {error.stdout}\nSTDERR: {error.stderr}")
+        raise PatchlensError(
+            f"Error processing commit {rev}: {error}\nSTDOUT: {error.stdout}\nSTDERR: {error.stderr}"
+        )
+
+
+def generate_run_id():
+    return str(uuid.uuid4())
+
+
+def get_patchlens_version(patchlens_executable):
+    command = [patchlens_executable, "--version"]
+    proc = subprocess.run(
+        command,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        decoded = proc.stdout.decode("utf-8")
+        return decoded.replace("\n", "").replace("\r", "")
+    except Exception as error:
+        raise PatchlensError(f"Error getting patchlens version: {error}")
 
 
 def main():
@@ -197,37 +311,37 @@ def main():
 
     db = sqlite3.connect(database_file)
 
-    cves = get_cves(db, product)
+    setup_tables(db)
 
-    print(f"Found {len(cves)} CVEs for product {product}!")
+    patches = get_patches(db, product)
+
+    print(f"Found {len(patches)} CVEs for product {product}!")
+
+    patchlens_version = get_patchlens_version(custom_patchlens_path)
+    run_id = generate_run_id()
 
     processed_count = 0
-    total = len(cves)
-    with open(output_file, "w", newline="") as csvfile:
-        spamwriter = csv.writer(
-            csvfile, delimiter=",", quotechar='"', quoting=csv.QUOTE_ALL
-        )
-        for cve in cves:
-            try:
-                result = process_patch(
-                    repository_path, cve, patches_folder, custom_patchlens_path
-                )
+    total = len(patches)
+    for patch in patches:
+        try:
+            result = process_patch(
+                repository_path, patch, patches_folder, custom_patchlens_path
+            )
 
-                # Ensure the result does not contain any newline to avoid corrupting the CSV structure
-                result = result.replace("\n", "").replace("\r", "")
-                spamwriter.writerow([cve.cve_id, "ok", result])
-                print(f"\r[FLAGS] {cve.cve_id} = {result}")
-            except CheckoutError as error:
-                print(f"\r[ERROR] Checkout error for {cve.cve_id}: {error}")
-                spamwriter.writerow([cve.cve_id, "CheckoutError", error.__str__()])
-            except PatchlensError as error:
-                print(f"\r[ERROR] Patchlens failed on {cve.cve_id}: {error}")
-                spamwriter.writerow([cve.cve_id, "PatchlensError", error.__str__()])
-            finally:
-                processed_count += 1
+            # Ensure the result does not contain any newline to avoid corrupting the CSV structure
+            result = result.replace("\n", "").replace("\r", "")
+            insert_flags(db, [FlagRow(patch_id=patch.patch_id, status="ok", flag=result, error=None)], run_id, patchlens_version)
+            print(f"\r[FLAGS] {patch.patch_id} = {result}")
+        except CheckoutError as error:
+            print(f"\r[ERROR] Checkout error for {patch.patch_id}: {error}")
+            insert_flags(db, [FlagRow(patch_id=patch.patch_id, status="CheckoutError", flag=None, error=error.__str__())], run_id, patchlens_version)
+        except PatchlensError as error:
+            print(f"\r[ERROR] Patchlens failed on {patch.patch_id}: {error}")
+            insert_flags(db, [FlagRow(patch_id=patch.patch_id, status="PatchlensError", flag=None, error=error.__str__())], run_id, patchlens_version)
+        finally:
+            processed_count += 1
 
-            csvfile.flush()
-            print(f"\rProgress: {processed_count}/{total}", end="")
+        print(f"\rProgress: {processed_count}/{total}", end="")
 
     print()
 
