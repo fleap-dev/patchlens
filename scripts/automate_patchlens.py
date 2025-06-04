@@ -169,21 +169,21 @@ def download_patch_from_github(url: str, output_path: str) -> str:
 
 
 def process_patch(
-    repo_path: str, cve_info: PatchRow, patches_folder: str, patchlens_executable: str
+    repo_path: str, patch_info: PatchRow, patches_folder: str, patchlens_executable: str
 ) -> str:
-    patch_file = cve_info.patch_file
+    patch_file = patch_info.patch_file
 
-    if cve_info.patch_file is not None:
-        patch_file = os.path.join(patches_folder, cve_info.patch_file)
+    if patch_info.patch_file is not None:
+        patch_file = os.path.join(patches_folder, patch_info.patch_file)
     else:
-        if cve_info.github_patch_url is None:
+        if patch_info.github_patch_url is None:
             raise ValueError("No patch file or github URL provided")
         github_patches_folder = os.path.join(patches_folder, "github")
         if not os.path.isdir(github_patches_folder):
             os.makedirs(github_patches_folder)
         patch_file = download_patch_from_github(
-            cve_info.github_patch_url,
-            os.path.join(github_patches_folder, cve_info.cve_id + ".txt")
+            patch_info.github_patch_url,
+            os.path.join(github_patches_folder, patch_info.patch_id + ".txt")
         )
 
     rev, _ = get_patch_info(patch_file)
