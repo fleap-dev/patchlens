@@ -7,8 +7,10 @@
 # ///
 import argparse
 import ast
-import z3
 import json
+
+import z3
+
 
 class ExpressionSimplifier:
     # Map Python AST ops to Z3 functions
@@ -18,7 +20,7 @@ class ExpressionSimplifier:
         ast.Not: z3.Not,
         ast.BitOr: lambda a, b: z3.Or(a, b),
         ast.BitAnd: lambda a, b: z3.And(a, b),
-        ast.Invert: z3.Not
+        ast.Invert: z3.Not,
     }
 
     def __init__(self):
@@ -35,7 +37,9 @@ class ExpressionSimplifier:
             return op(*[self.ast_to_z3(v) for v in node.values])
         elif isinstance(node, ast.BinOp):
             if type(node.op) in self.OP_MAP:
-                return self.OP_MAP[type(node.op)](self.ast_to_z3(node.left), self.ast_to_z3(node.right))
+                return self.OP_MAP[type(node.op)](
+                    self.ast_to_z3(node.left), self.ast_to_z3(node.right)
+                )
             else:
                 raise ValueError(f"Unsupported binary op: {ast.dump(node.op)}")
         elif isinstance(node, ast.UnaryOp):
@@ -50,6 +54,17 @@ class ExpressionSimplifier:
             return self.z3_vars[var_name]
         elif isinstance(node, ast.Expr):
             return self.ast_to_z3(node.value)
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and len(node.args) > 0
+            and isinstance(node.args[0], ast.Constant)
+        ):
+            first_arg = node.args[0].value
+            var_name = f"{node.func.id}({first_arg})"
+            if var_name not in self.z3_vars:
+                self.z3_vars[var_name] = z3.Bool(var_name)
+            return self.z3_vars[var_name]
         else:
             raise ValueError(f"Unsupported AST node: {ast.dump(node)}")
 
@@ -77,7 +92,7 @@ class ExpressionSimplifier:
         :return: A Z3 expression.
         """
         # Parse the input expression into an AST
-        ast_expr = ast.parse(input_exp, mode='eval').body
+        ast_expr = ast.parse(input_exp, mode="eval").body
 
         # Convert AST to Z3 expression
         return self.ast_to_z3(ast_expr)
@@ -96,12 +111,20 @@ class ExpressionSimplifier:
         return self.z3_to_str(simplified_expr)
 
 
-
 # ---- CLI ----
 def main():
-    parser = argparse.ArgumentParser(description="Boolean expression simplifier using Z3")
-    parser.add_argument("--expr", type=str, required=True, help="Boolean expression in Python syntax (e.g., '(A | B) & C')")
-    parser.add_argument("--output", type=str, help="Output file for the simplified expression")
+    parser = argparse.ArgumentParser(
+        description="Boolean expression simplifier using Z3"
+    )
+    parser.add_argument(
+        "--expr",
+        type=str,
+        required=True,
+        help="Boolean expression in Python syntax (e.g., '(A | B) & C')",
+    )
+    parser.add_argument(
+        "--output", type=str, help="Output file for the simplified expression"
+    )
     args = parser.parse_args()
     expr_str = args.expr
     output_file = args.output
@@ -120,15 +143,12 @@ def main():
         output = {
             "original": expr_str,
             "simplified": simplified_str,
-            "variables": sorted(simplifier.z3_vars.keys())
+            "variables": sorted(simplifier.z3_vars.keys()),
         }
         # Write output to JSON file
         with open(output_file, "w") as f:
             json.dump(output, f, indent=4)
 
 
-
 if __name__ == "__main__":
     main()
-
-

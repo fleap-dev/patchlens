@@ -3,21 +3,21 @@
 # requires-python = ">=3.13"
 # dependencies = [
 #     "requests",
+#     "z3-solver",
 # ]
 # ///
 
-from datetime import datetime
-import random
-import string
-import requests
 import argparse
 import os
 import re
 import sqlite3
 import subprocess
-import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from typing import List, Literal, Optional, Tuple
+
+import requests
+from simplifier import ExpressionSimplifier
 
 
 @dataclass
@@ -33,7 +33,7 @@ class PatchRow:
 @dataclass
 class FlagRow:
     patch_id: str
-    status: Literal["ok", "CheckoutError", "PatchlensError"]
+    status: Literal["ok", "CheckoutError", "PatchlensError", "DoesNotModifyCSource"]
     flag: str | None
     error: str | None
 
@@ -46,6 +46,12 @@ class CheckoutError(Exception):
 
 class PatchlensError(Exception):
     """Raised when the patchlens tool fails."""
+
+    pass
+
+
+class DoesNotModifyCSource(Exception):
+    """Raised when the patch does not modify a C source file."""
 
     pass
 
@@ -66,7 +72,10 @@ def setup_tables(db: sqlite3.Connection):
 
 
 def insert_flags(
-    db: sqlite3.Connection, flags: List[FlagRow], run_started_at: datetime, patchlens_version: str
+    db: sqlite3.Connection,
+    flags: List[FlagRow],
+    run_started_at: datetime,
+    patchlens_version: str,
 ):
     query = """
         INSERT INTO "flags" (
@@ -81,7 +90,14 @@ def insert_flags(
     db.executemany(
         query,
         [
-            (run_started_at.isoformat(), patchlens_version, f.patch_id, f.status, f.flag, f.error)
+            (
+                run_started_at.isoformat(),
+                patchlens_version,
+                f.patch_id,
+                f.status,
+                f.flag,
+                f.error,
+            )
             for f in flags
         ],
     )
@@ -159,6 +175,7 @@ def get_patches(db: sqlite3.Connection, product: str) -> list[PatchRow]:
         )
     return rows
 
+
 def download_patch_from_github(url: str, output_path: str) -> str:
     response = requests.get(url + ".patch")
     if response.status_code != 200:
@@ -183,10 +200,14 @@ def process_patch(
             os.makedirs(github_patches_folder)
         patch_file = download_patch_from_github(
             patch_info.github_patch_url,
-            os.path.join(github_patches_folder, patch_info.patch_id + ".txt")
+            os.path.join(github_patches_folder, patch_info.patch_id + ".txt"),
         )
 
-    rev, _ = get_patch_info(patch_file)
+    try:
+        rev, _ = get_patch_info(patch_file)
+    except UnicodeDecodeError:
+        raise CheckoutError(f"Failed to decode UTF-8 in patch file {patch_file}")
+
     try:
         # Checkout the commit in the repository
         subprocess.run(
@@ -218,12 +239,22 @@ def process_patch(
         )
         try:
             decoded = proc.stdout.decode("utf-8")
-            return decoded
+            simplifier = ExpressionSimplifier()
+            return simplifier.simplify(decoded)
         except UnicodeError as error:
             raise PatchlensError(
                 f"Invalid unicode output from patchlens on {rev}: {error}"
             )
     except subprocess.CalledProcessError as error:
+        if error.stderr:
+            try:
+                decoded: str = error.stderr.decode("utf-8")
+                if "this patch modifies a file that is not a c file" in decoded:
+                    raise DoesNotModifyCSource(
+                        f"Patch does not modify a C source file on {rev}: {error}"
+                    )
+            except UnicodeError as _:
+                pass
         raise PatchlensError(
             f"Error processing commit {rev}: {error}\nSTDOUT: {error.stdout}\nSTDERR: {error.stderr}"
         )
@@ -329,14 +360,51 @@ def main():
 
             # Ensure the result does not contain any newline to avoid corrupting the CSV structure
             result = result.replace("\n", "").replace("\r", "")
-            insert_flags(db, [FlagRow(patch_id=patch.patch_id, status="ok", flag=result, error=None)], run_started_at, patchlens_version)
-            print(f"\r[FLAGS] {patch.patch_id} = {result}")
+            insert_flags(
+                db,
+                [
+                    FlagRow(
+                        patch_id=patch.patch_id, status="ok", flag=result, error=None
+                    )
+                ],
+                run_started_at,
+                patchlens_version,
+            )
+            print(f"\r[FLAGS] {patch.cve_id}/{patch.patch_id} = {result}")
         except CheckoutError as error:
-            print(f"\r[ERROR] Checkout error for {patch.patch_id}: {error}")
-            insert_flags(db, [FlagRow(patch_id=patch.patch_id, status="CheckoutError", flag=None, error=error.__str__())], run_started_at, patchlens_version)
+            print(
+                f"\r[ERROR] Checkout error for {patch.cve_id}/{patch.patch_id}: {error}"
+            )
+            insert_flags(
+                db,
+                [
+                    FlagRow(
+                        patch_id=patch.patch_id,
+                        status="CheckoutError",
+                        flag=None,
+                        error=error.__str__(),
+                    )
+                ],
+                run_started_at,
+                patchlens_version,
+            )
         except PatchlensError as error:
-            print(f"\r[ERROR] Patchlens failed on {patch.patch_id}: {error}")
-            insert_flags(db, [FlagRow(patch_id=patch.patch_id, status="PatchlensError", flag=None, error=error.__str__())], run_started_at, patchlens_version)
+            print(
+                f"\r[ERROR] Patchlens failed on {patch.cve_id}/{patch.patch_id}: {error}"
+            )
+            insert_flags(
+                db,
+                [
+                    FlagRow(
+                        patch_id=patch.patch_id,
+                        status="PatchlensError",
+                        flag=None,
+                        error=error.__str__(),
+                    )
+                ],
+                run_started_at,
+                patchlens_version,
+            )
         finally:
             processed_count += 1
 

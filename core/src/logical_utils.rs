@@ -26,7 +26,7 @@ impl Display for Flag {
             Self::False => write!(f, "0"),
             Self::Building(file) => write!(f, "building(\"{file}\")"),
             Self::Defined(s) => write!(f, "defined(\"{s}\")"),
-            Self::Not(s) => write!(f, "(!{s})"),
+            Self::Not(s) => write!(f, "(not {s})"),
             Self::And(flags) => write!(
                 f,
                 "({})",
@@ -40,7 +40,7 @@ impl Display for Flag {
                     //})
                     .map(|f| f.to_string())
                     .collect::<Vec<_>>()
-                    .join(" && ")
+                    .join(" & ")
             ),
             Self::Or(flags) => write!(
                 f,
@@ -55,7 +55,7 @@ impl Display for Flag {
                     //})
                     .map(|f| f.to_string())
                     .collect::<Vec<_>>()
-                    .join(" || ")
+                    .join(" | ")
             ),
         }
     }
