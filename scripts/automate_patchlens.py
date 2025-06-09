@@ -275,6 +275,10 @@ def get_patchlens_version(patchlens_executable):
         raise PatchlensError(f"Error getting patchlens version: {error}")
 
 
+def process_building_flags(flags: str, expand_building_flags_with: str) -> str:
+    pass
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -299,6 +303,12 @@ def main():
         help="The CSV file to write the output data",
     )
     parser.add_argument(
+        "--expand-building-flags-with",
+        type=str,
+        required=False,
+        help="Program that will be used to expand the building flags. This script will execute <program> passing <path_to_file> as the first argument.",
+    )
+    parser.add_argument(
         "product",
         help="The product you will be automating. E.g. linux/linux_kernel",
     )
@@ -315,6 +325,7 @@ def main():
     patches_folder: str = os.path.abspath(args.patches_folder)
     output_file: str = os.path.abspath(args.output)
     custom_patchlens_path: Optional[str] = args.patchlens
+    expand_building_flags_with: Optional[str] = args.expand_building_flags_with
 
     if not os.path.exists(database_file):
         print(f"Database file at {database_file} does not exist!")
@@ -357,6 +368,9 @@ def main():
             result = process_patch(
                 repository_path, patch, patches_folder, custom_patchlens_path
             )
+
+            if expand_building_flags_with:
+                result = process_building_flags(result, expand_building_flags_with)
 
             # Ensure the result does not contain any newline to avoid corrupting the CSV structure
             result = result.replace("\n", "").replace("\r", "")

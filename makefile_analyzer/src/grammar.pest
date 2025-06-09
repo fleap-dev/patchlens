@@ -1,0 +1,149 @@
+// Makefile.pest
+// Linux-kernel Kbuild / Makefile subset
+
+// ——————————————————————————————————————————————————————————
+// 0. Implicit whitespace & comments
+// mark these silent so they don’t appear in the parse tree
+WHITESPACE     = _{ " " | "\t" }
+COMMENT        = _{ "#" ~ (!"\n" ~ ANY)* }
+NEWLINE        = _{ "\n" }
+NEWLINE_OR_EOI = _{ NEWLINE | EOI }
+
+// ——————————————————————————————————————————————————————————
+// 1. Top-level
+file = ${ SOI ~ line* ~ EOI }
+line = _{
+    command_line
+  | (WHITESPACE* ~ (blank_line | define_stmt | include_stmt | variability_block | list_assignment | function_stmt | assignment | target))
+}
+
+function_stmt = _{
+    var_expansion // the initial "$(foreach …)"
+  ~ assignment_value // eat all the rest (including continuation+newline)
+  ~ NEWLINE
+}
+
+// ——————————————————————————————————————————————————————————
+// 2. Blank lines & comments
+blank_line = _{ (WHITESPACE | COMMENT)* ~ NEWLINE }
+
+// ——————————————————————————————————————————————————————————
+// 3. Include
+include_stmt =  { "include " ~ path ~ NEWLINE }
+path         = @{ (!NEWLINE ~ ANY)+ }
+
+// ——————————————————————————————————————————————————————————
+// 4. Variability / conditional blocks
+
+variability_block = {
+    variability_block_main ~  // optional else-branch
+  variability_block_alternative ~ endif_stmt
+}
+
+variability_block_main = ${
+    (ifeq_stmt | ifneq_stmt | ifdef_stmt | ifndef_stmt) ~ line*
+}
+
+variability_block_alternative = ${
+    (else_stmt ~ line*)?
+}
+
+ifeq_stmt  = ${ "ifeq" ~ WS* ~ "(" ~ WS* ~ ifeq_param? ~ WS* ~ "," ~ WS* ~ ifeq_param? ~ WS* ~ ")" ~ WS* ~ NEWLINE_OR_EOI }
+ifneq_stmt = ${ "ifneq" ~ WS* ~ "(" ~ WS* ~ ifeq_param? ~ WS* ~ "," ~ WS* ~ ifeq_param? ~ WS* ~ ")" ~ WS* ~ NEWLINE_OR_EOI }
+
+// a comma- or right-paren-delimited sequence of nested expansions & other chars
+ifeq_param = @{ (var_expansion | !("," | ")") ~ ANY)+ }
+
+ifdef_stmt  =  { "ifdef" ~ WHITESPACE* ~ var_name ~ WHITESPACE* ~ NEWLINE }
+ifndef_stmt =  { "ifndef" ~ WHITESPACE* ~ var_name ~ WHITESPACE* ~ NEWLINE }
+else_stmt   =  { "else" ~ WHITESPACE* ~ NEWLINE }
+endif_stmt  = @{ "endif" ~ (WHITESPACE | COMMENT)* ~ NEWLINE }
+
+// IFEQVALUE = { var_expansion | ident }
+
+// ——————————————————————————————————————————————————————————
+// 5. List assignments (obj-y, drivers-m, etc.)
+
+ws_cont = _{ WHITESPACE+ | continuation }
+
+list_assignment = {
+    list_name ~ ws_cont* ~ assignment_op ~ ws_cont* ~ list_value ~ NEWLINE_OR_EOI
+}
+
+// list-names like "obj-y", "drivers-m", "lib-objs", etc.
+list_name = ${
+    ASCII_ALPHANUMERIC+ ~ "-" ~ (var_expansion | "y" | "m" | "objs")
+}
+
+// the RHS: a sequence of .o files, subdirs, or variable refs
+list_value =  { (list_item ~ WS?)+ }
+list_item  = _{ object_filename | subdir | var_expansion }
+
+object_filename = @{ "<generated>"? ~ (ASCII_ALPHANUMERIC | "-" | "_" | "/")* ~ ".o" }
+subdir          = @{ (ASCII_ALPHANUMERIC | "-" | "_" | "/")* ~ "/" }
+
+// ——————————————————————————————————————————————————————————
+// 6. Generic variable assignments
+
+assignment       =  {
+    var_name ~ ws_cont* ~ assignment_op ~ ws_cont* ~ assignment_value ~ NEWLINE_OR_EOI
+}
+var_name         = @{ (var_expansion | ident)+ }
+assignment_op    = @{ ":=" | "+=" | "?=" | "=" }
+assignment_value = @{ (continuation | (!NEWLINE ~ ANY))* }
+continuation     = @{ "\\" ~ NEWLINE ~ WHITESPACE* }
+
+// simple identifiers
+ident = @{ (ASCII_ALPHANUMERIC | "-" | "_" | "." | "/")+ }
+
+// ——————————————————————————————————————————————————————————
+// 7. Variable expansion
+
+var_expansion = @{
+    "$(" ~ var_inner* ~ ")" // atomic, so we grab the entire nested expansion
+
+  | "${" ~ var_inner* ~ "}"
+}
+
+// everything that can appear inside a $()/ ${}: either another nested expansion,
+// or any single character except the matching closing brace/paren
+var_inner = _{ var_expansion | !(")" | "}") ~ ANY }
+
+// ——————————————————————————————————————————————————————————
+// 8. Stubbed targets (Kbuild doesn’t really use them, but just in case)
+
+// A target with zero-or-more prerequisites, then zero-or-more indented recipe lines
+target = ${
+    var_name // "TAGS" or "$(obj)/foo.o" etc.
+  ~ WS* ~ ":" // the separator
+  // zero or more prerequisites
+  ~ WS* ~ (prereq_item ~ WS+)* ~ NEWLINE_OR_EOI // end of the rule‐head
+  // now any number of recipe lines (each one must start with a tab)
+}
+
+// what can appear after the colon
+prereq_item = @{ (var_expansion | ident | subdir)+ }
+
+// A recipe line must start with a TAB, then the shell command, then a newline
+command_line = @{ "\t" ~ (!NEWLINE ~ ANY)* ~ NEWLINE_OR_EOI }
+
+// ——————————————————————————————————————————————————————————
+// 9. Helpers
+
+define_stmt = _{
+    "define" ~ WHITESPACE* ~ var_name ~ NEWLINE // header
+  ~ define_line* // body (zero or more lines)
+  ~ "endef" ~ (WHITESPACE | COMMENT)* ~ NEWLINE_OR_EOI // footer
+}
+
+/// One line inside a `define` must consume at least one real newline:
+define_line = _{
+    continuation // “\” + newline
+
+  | (!NEWLINE ~ ANY)+ ~ NEWLINE
+}
+
+ASCII_ALPHANUMERIC = _{ 'a'..'z' | 'A'..'Z' | '0'..'9' }
+WS                 = _{ WHITESPACE+ }
+
+// `SOI` and `EOI` are built-in Pest rules for start/end of input

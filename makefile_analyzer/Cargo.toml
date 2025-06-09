@@ -1,0 +1,12 @@
+[package]
+name = "makefile_analyzer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+patchlens = { path = "../core", package = "core" }
+clap = { version = "4.5.39", features = ["derive"] }
+pest = "2.8.0"
+pest_derive = "2.8.0"
+anyhow = "1.0.98"
+regex = "1.11.1"
