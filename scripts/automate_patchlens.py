@@ -186,7 +186,11 @@ def download_patch_from_github(url: str, output_path: str) -> str:
 
 
 def process_patch(
-    repo_path: str, patch_info: PatchRow, patches_folder: str, patchlens_executable: str
+    repo_path: str,
+    patch_info: PatchRow,
+    patches_folder: str,
+    patchlens_executable: str,
+    expand_building_flags_with: Optional[str],
 ) -> str:
     patch_file = patch_info.patch_file
 
@@ -229,7 +233,18 @@ def process_patch(
 
     try:
         # Run your custom command on the checked-out commit
-        command = [patchlens_executable, "analyze-git", repo_path, patch_file]
+        command = (
+            [
+                patchlens_executable,
+                "-e",
+                expand_building_flags_with,
+                "analyze-git",
+                repo_path,
+                patch_file,
+            ]
+            if expand_building_flags_with
+            else [patchlens_executable, "analyze-git", repo_path, patch_file]
+        )
         proc = subprocess.run(
             command,  # Command to run (as a string)
             cwd=repo_path,
@@ -240,7 +255,9 @@ def process_patch(
         try:
             decoded = proc.stdout.decode("utf-8")
             simplifier = ExpressionSimplifier()
-            return simplifier.simplify(decoded)
+            simp = simplifier.simplify(decoded)
+            print(f"{decoded} -> {simp}")
+            return simp
         except UnicodeError as error:
             raise PatchlensError(
                 f"Invalid unicode output from patchlens on {rev}: {error}"
@@ -275,10 +292,6 @@ def get_patchlens_version(patchlens_executable):
         raise PatchlensError(f"Error getting patchlens version: {error}")
 
 
-def process_building_flags(flags: str, expand_building_flags_with: str) -> str:
-    pass
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -303,6 +316,7 @@ def main():
         help="The CSV file to write the output data",
     )
     parser.add_argument(
+        "-E",
         "--expand-building-flags-with",
         type=str,
         required=False,
@@ -366,11 +380,12 @@ def main():
     for patch in patches:
         try:
             result = process_patch(
-                repository_path, patch, patches_folder, custom_patchlens_path
+                repository_path,
+                patch,
+                patches_folder,
+                custom_patchlens_path,
+                expand_building_flags_with,
             )
-
-            if expand_building_flags_with:
-                result = process_building_flags(result, expand_building_flags_with)
 
             # Ensure the result does not contain any newline to avoid corrupting the CSV structure
             result = result.replace("\n", "").replace("\r", "")

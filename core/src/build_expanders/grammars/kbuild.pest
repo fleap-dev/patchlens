@@ -36,16 +36,27 @@ path         = @{ (!NEWLINE ~ ANY)+ }
 // 4. Variability / conditional blocks
 
 variability_block = {
-    variability_block_main ~  // optional else-branch
-  variability_block_alternative ~ endif_stmt
+    variability_block_main ~ variability_block_alternative? ~ endif_stmt
 }
 
-variability_block_main = ${
+variability_block_main = {
     (ifeq_stmt | ifneq_stmt | ifdef_stmt | ifndef_stmt) ~ line*
 }
 
-variability_block_alternative = ${
-    (else_stmt ~ line*)?
+// either an `else if…` _or_ a plain `else`
+variability_block_alternative = {
+    else_if_block
+  | else_block
+}
+
+// catch "else ifeq(...)" / "else ifneq(...)" / "else ifdef ..." / "else ifndef ..."
+else_if_block = {
+    "else" ~ WHITESPACE+ ~ (ifeq_stmt | ifneq_stmt | ifdef_stmt | ifndef_stmt) ~ line*
+}
+
+// catch a plain "else" with its own body
+else_block = {
+    "else" ~ WHITESPACE* ~ NEWLINE ~ line*
 }
 
 ifeq_stmt  = ${ "ifeq" ~ WS* ~ "(" ~ WS* ~ ifeq_param? ~ WS* ~ "," ~ WS* ~ ifeq_param? ~ WS* ~ ")" ~ WS* ~ NEWLINE_OR_EOI }
@@ -56,7 +67,6 @@ ifeq_param = @{ (var_expansion | !("," | ")") ~ ANY)+ }
 
 ifdef_stmt  =  { "ifdef" ~ WHITESPACE* ~ var_name ~ WHITESPACE* ~ NEWLINE }
 ifndef_stmt =  { "ifndef" ~ WHITESPACE* ~ var_name ~ WHITESPACE* ~ NEWLINE }
-else_stmt   =  { "else" ~ WHITESPACE* ~ NEWLINE }
 endif_stmt  = @{ "endif" ~ (WHITESPACE | COMMENT)* ~ NEWLINE }
 
 // IFEQVALUE = { var_expansion | ident }

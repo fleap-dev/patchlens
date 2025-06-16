@@ -54,6 +54,8 @@ class ExpressionSimplifier:
             return self.z3_vars[var_name]
         elif isinstance(node, ast.Expr):
             return self.ast_to_z3(node.value)
+        elif isinstance(node, ast.Constant):
+            return z3.BoolVal(not not node.value)
         elif (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)

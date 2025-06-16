@@ -1,7 +1,9 @@
 use anyhow::{Context, bail};
 use clap::{Parser as ClapParser, Subcommand};
 use patchlens::logical_utils::Flag;
-use patchlens::{analyze_variants_affected, mail_utils, patch_utils, preprocessor};
+use patchlens::{
+    analyze_variants_affected, build_expanders, mail_utils, patch_utils, preprocessor,
+};
 use std::path::{Path, PathBuf};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
@@ -11,6 +13,8 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+    #[arg(short = 'e', value_enum)]
+    build_system_expander: Option<BuildSystemExpander>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -30,6 +34,12 @@ enum Commands {
         #[arg()]
         diff_file: PathBuf,
     },
+}
+
+#[derive(clap::Parser, Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+#[clap(rename_all = "kebab_case")]
+enum BuildSystemExpander {
+    Linux,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -109,7 +119,27 @@ fn main() -> anyhow::Result<()> {
                 .collect::<anyhow::Result<Vec<_>>>()
                 .context("failed to process patch")?;
 
-            let final_flags = Flag::Or(result);
+            let mut final_flags = Flag::Or(result);
+
+            match args.build_system_expander {
+                Some(BuildSystemExpander::Linux) => {
+                    final_flags = final_flags.map_building_flags(|mut file| {
+                        if file.starts_with("/") {
+                            file = file[1..].to_string();
+                        }
+                        let file = git_repo.join(file);
+
+                        build_expanders::linux::find_required_configs(&git_repo, &file)
+                            .unwrap_or_else(|e| {
+                                eprintln!(
+                                    "Warning: build flag expansion failed for {file:?}: {e:?}"
+                                );
+                                Flag::True
+                            })
+                    });
+                }
+                None => {}
+            }
 
             println!("{final_flags}");
         }

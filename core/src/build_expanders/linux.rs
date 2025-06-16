@@ -157,6 +157,7 @@ fn parse_makefile_lines<'a>(lines: impl Iterator<Item = Pair<'a, Rule>>) -> Vec<
 }
 
 fn parse_variability_block(line: Pair<'_, Rule>) -> BNode {
+    // TODO: nested elif blocks are still not implemented
     let mut inner = line.into_inner();
 
     let mut main_block = inner.next().unwrap().into_inner();
