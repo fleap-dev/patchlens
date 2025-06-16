@@ -2,6 +2,7 @@ use anyhow::{ensure, Context};
 use logical_utils::Flag;
 use tree_sitter::{Node, Parser};
 
+pub mod build_expanders;
 pub mod logical_utils;
 pub mod mail_utils;
 pub mod patch_utils;

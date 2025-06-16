@@ -63,4 +63,24 @@ impl Display for Flag {
     }
 }
 
-impl Flag {}
+impl Flag {
+    pub fn map_building_flags(self, f: impl Fn(String) -> Flag + Copy) -> Self {
+        match self {
+            Self::Building(file) => f(file),
+            Self::Not(flag) => Self::Not(Box::new(flag.map_building_flags(f))),
+            Self::And(inner) => Self::And(
+                inner
+                    .into_iter()
+                    .map(|flag| flag.map_building_flags(f))
+                    .collect(),
+            ),
+            Self::Or(inner) => Self::Or(
+                inner
+                    .into_iter()
+                    .map(|flag| flag.map_building_flags(f))
+                    .collect(),
+            ),
+            _ => self,
+        }
+    }
+}
