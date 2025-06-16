@@ -434,6 +434,23 @@ def main():
                 run_started_at,
                 patchlens_version,
             )
+        except DoesNotModifyCSource as error:
+            print(
+                f"\r[ERROR] Patch does not modify only C source files {patch.cve_id}/{patch.patch_id}: {error}"
+            )
+            insert_flags(
+                db,
+                [
+                    FlagRow(
+                        patch_id=patch.patch_id,
+                        status="DoesNotModifyCSource",
+                        flag=None,
+                        error=error.__str__(),
+                    )
+                ],
+                run_started_at,
+                patchlens_version,
+            )
         finally:
             processed_count += 1
 
