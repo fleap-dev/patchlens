@@ -118,7 +118,7 @@ pub fn analyze_configs_for_ast_node(source: &str, node: Node) -> Flag {
     }
 }
 
-enum IfdefCommand {
+pub enum IfdefCommand {
     Ifdef,
     Ifndef,
 }

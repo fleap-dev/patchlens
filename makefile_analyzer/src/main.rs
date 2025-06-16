@@ -68,7 +68,7 @@ fn find_required_configs(linux_root: &Path, target: &Path) -> anyhow::Result<Fla
             .to_str()
             .context("filename not valid UTF-8")?;
         let mut make_target = if current.is_dir() {
-            format!("{}/", base)
+            format!("{base}/")
         } else if current.extension().and_then(OsStr::to_str) == Some("c") {
             format!("{}.o", base.strip_suffix(".c").unwrap())
         } else {
@@ -84,7 +84,7 @@ fn find_required_configs(linux_root: &Path, target: &Path) -> anyhow::Result<Fla
             break;
         }
 
-        eprintln!("Checking {:?} -> {}", current, make_target);
+        eprintln!("Checking {current:?} -> {make_target}");
 
         // Parse this directory’s Makefile/Kbuild
         let makefile = find_makefile(&current).context("no Makefile/Kbuild here")?;
@@ -101,7 +101,7 @@ fn find_required_configs(linux_root: &Path, target: &Path) -> anyhow::Result<Fla
                         if value.iter().any(|v| v == &make_target) {
                             // e.g. `nfc-objs := ... klee.o ...`
                             conditions.push(node.condition.clone());
-                            make_target = format!("{}.o", base_name);
+                            make_target = format!("{base_name}.o");
                             hopped = true;
                             break;
                         }
@@ -110,7 +110,7 @@ fn find_required_configs(linux_root: &Path, target: &Path) -> anyhow::Result<Fla
                     else if name != "obj" && value.iter().any(|v| v == &make_target) {
                         // e.g. `klee-$(CONFIG_AIBT) := aibt.o` parsed as name="klee"
                         conditions.push(node.condition.clone());
-                        make_target = format!("{}.o", name);
+                        make_target = format!("{name}.o");
                         hopped = true;
                         break;
                     }
@@ -124,13 +124,12 @@ fn find_required_configs(linux_root: &Path, target: &Path) -> anyhow::Result<Fla
         // (B) Now pick up the `obj += make_target` guard
         let mut found_obj = false;
         for node in &ast.children {
-            if let BNodeDetails::Assignment { name, value, .. } = &node.details {
-                if name == "obj" && value.iter().any(|v| v == &make_target) {
+            if let BNodeDetails::Assignment { name, value, .. } = &node.details
+                && name == "obj" && value.iter().any(|v| v == &make_target) {
                     conditions.push(node.condition.clone());
                     found_obj = true;
                     break;
                 }
-            }
         }
 
         ensure!(
@@ -158,13 +157,13 @@ fn parse_makefile(content: &str) -> BNode {
 
     let children = parse_makefile_lines(lines.into_iter());
 
-    let root = BNode {
+    
+
+    BNode {
         details: BNodeDetails::Makefile,
         children: children.collect(),
         condition: Flag::True,
-    };
-
-    root
+    }
 }
 
 fn parse_makefile_lines<'a>(

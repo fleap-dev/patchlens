@@ -109,7 +109,7 @@ fn main() -> anyhow::Result<()> {
                 .collect::<anyhow::Result<Vec<_>>>()
                 .context("failed to process patch")?;
 
-            let final_flags = Flag::Or(result).simplify();
+            let final_flags = Flag::Or(result);
 
             println!("{final_flags}");
         }

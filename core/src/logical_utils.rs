@@ -27,7 +27,7 @@ impl Display for Flag {
             Self::False => write!(f, "0"),
             Self::Building(file) => write!(f, "building(\"{file}\")"),
             Self::Defined(s) => write!(f, "defined(\"{s}\")"),
-            Self::Equal(a, b) => write!(f, "({} == {})", a, b),
+            Self::Equal(a, b) => write!(f, "({a} == {b})"),
             Self::Not(s) => write!(f, "(not {s})"),
             Self::And(flags) => write!(
                 f,

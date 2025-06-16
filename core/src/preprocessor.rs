@@ -55,11 +55,11 @@ pub fn expand_include_macros<P: AsRef<Path>>(
                     let inlined =
                         expand_include_macros_recursive(&text, &path, include_paths, visited)?;
 
-                    output.push_str(&format!("/* Begin include {} */\n", header_name));
+                    output.push_str(&format!("/* Begin include {header_name} */\n"));
                     output.push_str(&inlined);
-                    output.push_str(&format!("/* End include {} */\n", header_name));
+                    output.push_str(&format!("/* End include {header_name} */\n"));
                 } else {
-                    let err_msg = format!("/* Warning: include '{}' not found */\n", header_name);
+                    let err_msg = format!("/* Warning: include '{header_name}' not found */\n");
                     output.push_str(&err_msg);
                     eprintln!("{}", &err_msg);
                     continue;
