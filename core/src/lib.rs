@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use anyhow::{ensure, Context};
 use logical_utils::Flag;
 use tree_sitter::{Node, Parser};
@@ -98,7 +100,12 @@ pub fn analyze_configs_for_ast_node(source: &str, node: Node) -> Flag {
                     _ => unreachable!(),
                 };
 
-                conditions.push(flag);
+                match flag {
+                    // Filter out header guards
+                    Flag::Not(b) if matches!(b.deref(), Flag::Defined(s) if s.ends_with("_H") || s.ends_with("_H_") || s.ends_with("_H__")) =>
+                        {}
+                    _ => conditions.push(flag),
+                }
             }
             "preproc_else" => {
                 // Ignored because this will be checked on the parent preproc_ifdef...
