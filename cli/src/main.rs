@@ -129,13 +129,15 @@ fn main() -> anyhow::Result<()> {
                         }
                         let file = git_repo.join(file);
 
-                        build_expanders::linux::find_required_configs(&git_repo, &file)
-                            .unwrap_or_else(|e| {
-                                eprintln!(
-                                    "Warning: build flag expansion failed for {file:?}: {e:?}"
-                                );
-                                Flag::True
-                            })
+                        build_expanders::linux::find_required_configs(&git_repo, &file).expect(
+                            &format!("failed to find required configs for {}", file.display()),
+                        )
+                        // .unwrap_or_else(|e| {
+                        //     eprintln!(
+                        //         "Warning: build flag expansion failed for {file:?}: {e:?}"
+                        //     );
+                        //     Flag::True
+                        // })
                     });
                 }
                 None => {}
