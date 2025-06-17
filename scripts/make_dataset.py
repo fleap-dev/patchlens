@@ -218,7 +218,7 @@ def download_nvd_data(cve_data_folder):
     """
     Download the NVD data from the official website.
     """
-    url = "https://nvd.nist.gov/feeds/json/cve/1.1/nvdcve-1.1-{year}.json.gz"
+    url = "https://nvd.nist.gov/feeds/json/cve/2.0/nvdcve-2.0-{year}.json.gz"
     for year in range(2002, datetime.now().year + 1):
         filename = f"nvdcve-1.1-{year}.json.gz"
         filepath = os.path.join(cve_data_folder, filename)
@@ -253,7 +253,7 @@ def collect_cve_data(cve_data_folder, year) -> tuple[list[dict[str, Any]], list[
     with open(filepath, "r") as f:
         data = json.load(f)
 
-    cves = data["CVE_Items"]
+    cves = data["vulnerabilities"]
 
     entries = []
     patches = []
@@ -262,55 +262,66 @@ def collect_cve_data(cve_data_folder, year) -> tuple[list[dict[str, Any]], list[
     for row in cves:
         print(f"\rProcessed {processed} rows...", end="")
         configurations = []
-        for node in row["configurations"]["nodes"]:
-            for match in node["cpe_match"]:
-                configurations.append(match["cpe23Uri"])
+        if "configurations" in row["cve"]:
+            for cfg in row["cve"]["configurations"]:
+                nodes = cfg["nodes"]
+                for node in nodes:
+                    for match in node["cpeMatch"]:
+                        configurations.append(match["criteria"])
         calculated_product = calculate_probable_product(configurations)
         if calculated_product is None:
             skipped += 1
             continue
         entry = {
-            "cve_id": row["cve"]["CVE_data_meta"]["ID"],
+            "cve_id": row["cve"]["id"],
             "calculated_product": calculated_product,
-            "assigner": row["cve"]["CVE_data_meta"]["ASSIGNER"],
+            "assigner": row["cve"]["sourceIdentifier"],
             "problem_type": json.dumps(
                 list(
                     map(
-                        lambda x: list(map(lambda y: y["value"], x["description"])),
-                        row["cve"]["problemtype"]["problemtype_data"],
+                        lambda weakness: list(
+                            map(lambda d: d["value"], weakness["description"])
+                        ),
+                        row["cve"]["weaknesses"],
                     )
                 )
-            ),
-            "references": json.dumps(row["cve"]["references"]["reference_data"]),
-            "description": row["cve"]["description"]["description_data"][0]["value"],
+            )
+            if "weaknesses" in row["cve"]
+            else None,
+            "references": json.dumps(row["cve"]["references"]),
+            "description": row["cve"]["descriptions"][0]["value"],
             "configurations": json.dumps(configurations),
-            "severity": row["impact"]["baseMetricV3"]["cvssV3"]["baseSeverity"]
-            if row["impact"].get("baseMetricV3")
+            "severity": row["cve"]["metrics"]["cvssMetricV31"][0]["cvssData"][
+                "baseSeverity"
+            ]
+            if row["cve"]["metrics"].get("cvssMetricV31")
             else None,
             "cve_exploitability_score": safe_str_to_float(
-                row["impact"]["baseMetricV3"]["exploitabilityScore"]
-                if row["impact"].get("baseMetricV3")
+                row["cve"]["metrics"]["cvssMetricV31"][0]["exploitabilityScore"]
+                if row["cve"]["metrics"].get("cvssMetricV31")
                 else (
-                    row["impact"]["baseMetricV2"]["exploitabilityScore"]
-                    if row["impact"].get("baseMetricV2")
+                    row["cve"]["metrics"]["cvssMetricV2"][0]["exploitabilityScore"]
+                    if row["cve"]["metrics"].get("cvssMetricV2")
                     else None
                 ),
             ),
             "cve_impact_score": safe_str_to_float(
-                row["impact"]["baseMetricV3"]["impactScore"]
-                if row["impact"].get("baseMetricV3")
+                row["cve"]["metrics"]["cvssMetricV31"][0]["impactScore"]
+                if row["cve"]["metrics"].get("cvssMetricV31")
                 else (
-                    row["impact"]["baseMetricV2"]["impactScore"]
-                    if row["impact"].get("baseMetricV2")
+                    row["cve"]["metrics"]["cvssMetricV2"][0]["impactScore"]
+                    if row["cve"]["metrics"].get("cvssMetricV2")
                     else None
-                )
+                ),
             ),
             "patch_ref_count": 0,
         }
         cve_patches = []
-        for ref in row["cve"]["references"]["reference_data"]:
+        for ref in row["cve"]["references"]:
             url = ref["url"]
-            if "patch" in list(map(lambda x: x.lower(), ref["tags"])):
+            if ref.get("tags") and "patch" in list(
+                map(lambda x: x.lower(), ref["tags"])
+            ):
                 entry["patch_ref_count"] += 1
                 commit = extract_github_commit_hash(url)
                 if commit is not None:
