@@ -2,6 +2,7 @@ use std::ops::Deref;
 
 use anyhow::{ensure, Context};
 use logical_utils::Flag;
+use tracing::debug;
 use tree_sitter::{Node, Parser};
 
 pub mod build_expanders;
@@ -38,6 +39,8 @@ pub fn find_patchlens_ifdef_nodes<'a>(source: &'a str, root: Node<'a>) -> Vec<No
 }
 
 pub fn analyze_variants_affected(source: &str, filename: &str) -> Flag {
+    debug!("Analyzing {filename}...");
+
     let mut parser = Parser::new();
     parser
         .set_language(&tree_sitter_c::LANGUAGE.into())
@@ -111,7 +114,17 @@ pub fn analyze_configs_for_ast_node(source: &str, node: Node) -> Flag {
                 // Ignored because this will be checked on the parent preproc_ifdef...
             }
             "preproc_if" => {
-                todo!("preproc_if blocks are not yet implemented!")
+                let condition = inner.named_child(0).unwrap();
+                let last_kind = last.map(|l| l.kind());
+
+                let flag = parse_if_macro_condition(condition, source);
+
+                let flag = match last_kind {
+                    Some("preproc_else") => Flag::Not(Box::new(flag)),
+                    _ => flag,
+                };
+
+                conditions.push(flag);
             }
             _ => {}
         }
@@ -123,6 +136,56 @@ pub fn analyze_configs_for_ast_node(source: &str, node: Node) -> Flag {
         Flag::True
     } else {
         Flag::And(conditions)
+    }
+}
+
+fn parse_if_macro_condition(condition: Node, source: &str) -> Flag {
+    match condition.kind() {
+        "number_literal" => match condition.utf8_text(source.as_bytes()).unwrap().parse() {
+            Ok(num) => match num {
+                0 => Flag::False,
+                _ => Flag::True,
+            },
+            Err(_) => panic!(),
+        },
+        "preproc_defined" => Flag::Defined(
+            condition
+                .child(2)
+                .unwrap()
+                .utf8_text(source.as_bytes())
+                .unwrap()
+                .to_owned(),
+        ),
+        "unary_expression" => {
+            let operator = condition.child(0).unwrap();
+            let operand = condition.named_child(0).unwrap();
+
+            assert_eq!(
+                operator.kind(),
+                "!",
+                "unknown unary operator kind inside if macro"
+            );
+
+            Flag::Not(Box::new(parse_if_macro_condition(operand, source)))
+        }
+        "binary_expression" => {
+            let left = condition.named_child(0).unwrap();
+            let right = condition.named_child(1).unwrap();
+            let op = condition.child(1).unwrap();
+
+            let inner = vec![
+                parse_if_macro_condition(left, source),
+                parse_if_macro_condition(right, source),
+            ];
+
+            match op.kind() {
+                "||" => Flag::Or(inner),
+                "&&" => Flag::And(inner),
+                _ => panic!("unknown binary expression operator kind in if macro"),
+            }
+        }
+        "parenthesized_expression" => parse_if_macro_condition(condition.child(1).unwrap(), source),
+        _ => panic!("unknown expression inside if macro: {}", condition.kind()),
     }
 }
 
