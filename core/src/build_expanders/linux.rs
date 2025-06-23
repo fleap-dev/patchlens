@@ -29,6 +29,13 @@ pub fn find_required_configs(linux_root: &Path, target: &Path) -> anyhow::Result
     ensure!(linux_root.is_dir(), "linux root is not a directory");
     ensure!(target.is_file(), "target file does not exist");
 
+    let ext = target.extension().map(|s| s.to_str()).flatten();
+
+    ensure!(
+        ext != Some("h"),
+        "flag expansion for header files is still not implemented"
+    );
+
     // 2) Normalize paths
     let linux_root = linux_root.canonicalize()?;
     let mut current = target.canonicalize()?;
