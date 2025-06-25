@@ -33,7 +33,13 @@ class PatchRow:
 @dataclass
 class FlagRow:
     patch_id: str
-    status: Literal["ok", "CheckoutError", "PatchlensError", "DoesNotModifyCSource"]
+    status: Literal[
+        "ok",
+        "CheckoutError",
+        "PatchlensError",
+        "DoesNotModifyCSource",
+        "ModifiesHeaderFiles",
+    ]
     flag: str | None
     error: str | None
 
@@ -52,6 +58,12 @@ class PatchlensError(Exception):
 
 class DoesNotModifyCSource(Exception):
     """Raised when the patch does not modify a C source file."""
+
+    pass
+
+
+class ModifiesHeaderFiles(Exception):
+    """Raised when the patch modify a header file."""
 
     pass
 
@@ -266,6 +278,13 @@ def process_patch(
         if error.stderr:
             try:
                 decoded: str = error.stderr.decode("utf-8")
+                if (
+                    "flag expansion for header files is still not implemented"
+                    in decoded
+                ):
+                    raise ModifiesHeaderFiles(
+                        f"Patch modifies a C header file on {rev}: {error}"
+                    )
                 if "this patch modifies a file that is not a c file" in decoded:
                     raise DoesNotModifyCSource(
                         f"Patch does not modify a C source file on {rev}: {error}"
@@ -444,6 +463,23 @@ def main():
                     FlagRow(
                         patch_id=patch.patch_id,
                         status="DoesNotModifyCSource",
+                        flag=None,
+                        error=error.__str__(),
+                    )
+                ],
+                run_started_at,
+                patchlens_version,
+            )
+        except ModifiesHeaderFiles as error:
+            print(
+                f"\r[ERROR] Patch modifies C header files {patch.cve_id}/{patch.patch_id}: {error}"
+            )
+            insert_flags(
+                db,
+                [
+                    FlagRow(
+                        patch_id=patch.patch_id,
+                        status="ModifiesHeaderFiles",
                         flag=None,
                         error=error.__str__(),
                     )
