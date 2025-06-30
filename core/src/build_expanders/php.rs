@@ -85,7 +85,7 @@ fn analyze_config_file(config_path: &Path, c_filename: &str) -> anyhow::Result<F
     let content = std::fs::read_to_string(config_path)
         .with_context(|| format!("Could not read config file: {:?}", config_path))?;
 
-    // Step 1: Find the C file inside a known build macro to avoid ambiguity.
+    // Step 1: locate the C file in a PHP_NEW_EXTENSION / PHP_ADD_SOURCES macro
     let inclusion_regex = Regex::new(&format!(
         r"(?s)(?:PHP_NEW_EXTENSION|PHP_ADD_SOURCES)\s*\(.*?\b{}\b",
         regex::escape(c_filename)
@@ -94,67 +94,93 @@ fn analyze_config_file(config_path: &Path, c_filename: &str) -> anyhow::Result<F
         .find(&content)
         .context("Could not find file in a build macro")?;
 
-    // Step 2: Find the enclosing `if test ... fi` block.
-    let if_statement = match find_enclosing_if_block(&content, inclusion_match.start()) {
-        Some(stmt) => stmt,
-        None => return Ok(Flag::True), // Included unconditionally within this file
+    // Steps 2–3: scan all enclosing `if test …` blocks (innermost→outermost)
+    let var_regex = Regex::new(r"\$([A-Z0-9_]+)")?;
+    let mut chosen_var: Option<String> = None;
+    for stmt in find_all_enclosing_if_blocks(&content, inclusion_match.start()) {
+        if let Some(cap) = var_regex.captures(&stmt) {
+            let var_name = cap.get(1).unwrap().as_str().to_string();
+            // build the short option name, e.g. PHP_MYEXT → "myext"
+            let short = var_name
+                .trim_start_matches("PHP_")
+                .to_lowercase()
+                .replace('_', "-");
+            // check if this file actually defines a PHP_ARG_WITH or PHP_ARG_ENABLE for it
+            let macro_re = Regex::new(&format!(
+                r"(?s)PHP_ARG_(?:WITH|ENABLE)\s*\(.*?\b{}\b",
+                regex::escape(&short)
+            ))?;
+            if macro_re.is_match(&content) {
+                chosen_var = Some(var_name);
+                break;
+            }
+        }
+    }
+    // if we never saw a guarding if-test with a matching macro, it's unconditional
+    let variable_name = match chosen_var {
+        Some(v) => v,
+        None => return Ok(Flag::True),
     };
 
-    // Step 3: Extract the shell variable from the `if` statement.
-    let var_regex = Regex::new(r"\$([A-Z0-9_]+)")?;
-    let variable_name = var_regex
-        .captures(&if_statement)
-        .and_then(|c| c.get(1))
-        .map(|m| m.as_str())
-        .context("Could not parse variable from if statement")?;
-
-    // Step 4: Find the corresponding PHP_ARG_WITH/ENABLE macro definition.
-    let flag_short_name = variable_name
-        .replace("PHP_", "")
+    // Step 4: find that PHP_ARG_WITH/ENABLE definition
+    let flag_short = variable_name
+        .trim_start_matches("PHP_")
         .to_lowercase()
         .replace('_', "-");
     let flag_def_regex = Regex::new(&format!(
-        r"(?s)(PHP_ARG_(?:WITH|ENABLE))\s*\(\s*\[?{}\]?",
-        regex::escape(&flag_short_name)
+        r"(?s)PHP_ARG_(?:WITH|ENABLE)\s*\(.*?\b{}\b",
+        regex::escape(&flag_short)
     ))?;
     let flag_def_match = flag_def_regex
         .find(&content)
         .context("Could not find flag definition for variable")?;
-
-    // Step 5: Parse the arguments of that macro to find the full flag and default.
     let (macro_type, flag, default_val) = parse_php_arg_macro(&content, flag_def_match.start())?;
 
-    let mut conditions = vec![];
+    // Step 5: compute the main presence condition
     let main_cond = match (macro_type, default_val) {
-        // --enable-foo is off by default. Condition is "if defined"
-        ("PHP_ARG_ENABLE", "no") => Flag::Defined(variable_name.to_string()),
-        // --with-foo is on by default. Condition is "if not disabled"
-        ("PHP_ARG_WITH", "yes") => Flag::Not(Box::new(Flag::Equal(
-            variable_name.to_string(),
-            "no".to_string(),
-        ))),
-        // Other cases imply simple definition checks
-        _ => Flag::Defined(variable_name.to_string()),
+        ("PHP_ARG_ENABLE", "no") => Flag::Defined(variable_name.clone()),
+        ("PHP_ARG_WITH", "yes") => {
+            Flag::Not(Box::new(Flag::Equal(variable_name.clone(), "no".into())))
+        }
+        _ => Flag::Defined(variable_name.clone()),
     };
-    conditions.push(main_cond);
+    let mut conditions = vec![main_cond];
 
-    // Step 6: Find dependencies.
+    // Step 6: append any PHP_ADD_EXTENSION_DEP(...) flags
     let dep_regex = Regex::new(r"PHP_ADD_EXTENSION_DEP\([^,]+?,\s*(\w+)\)")?;
     for cap in dep_regex.captures_iter(&content) {
-        let dep_name = cap
+        let dep = cap
             .get(1)
             .unwrap()
             .as_str()
             .to_uppercase()
             .replace('-', "_");
-        conditions.push(Flag::Defined(format!("PHP_{}", dep_name)));
+        conditions.push(Flag::Defined(format!("PHP_{}", dep)));
     }
 
-    if conditions.len() == 1 {
-        Ok(conditions.pop().unwrap())
-    } else {
-        Ok(Flag::And(conditions))
+    // combine or return single
+    Ok(match conditions.len() {
+        0 | 1 => conditions.into_iter().next().unwrap_or(Flag::True),
+        _ => Flag::And(conditions),
+    })
+}
+
+fn find_all_enclosing_if_blocks(content: &str, pos: usize) -> Vec<String> {
+    let mut stack = 0;
+    let mut blocks = Vec::new();
+    for line in content[..pos].lines().rev() {
+        let s = line.trim_start();
+        if s.starts_with("fi") {
+            stack += 1;
+        } else if s.starts_with("if test") {
+            if stack == 0 {
+                blocks.push(s.to_string());
+            } else {
+                stack -= 1;
+            }
+        }
     }
+    blocks
 }
 
 /// Finds the `if test ...` block that encloses a given position.
