@@ -64,7 +64,12 @@ fn main() -> anyhow::Result<()> {
 
             // A patch file from `git format-patch` may patch multiple files. Here we split this patch file
             // into individual patches that only affect one file.
-            let single_file_patches = mail_utils::parse_mail_patch(&mail_patch_src);
+            let single_file_patches = mail_utils::parse_mail_patch(&mail_patch_src)
+                .into_iter()
+                .filter(|patch| {
+                    patch_utils::get_patch_original_file(patch, Some(1)).ends_with(".c")
+                })
+                .collect::<Vec<_>>();
 
             // Verify if the patch file only modify .c files
             // If the patch modify something else, we cannot be certain about its effects
@@ -78,6 +83,8 @@ fn main() -> anyhow::Result<()> {
                     {
                         Some("c") => Ok(filename),
                         Some("h") => Ok(filename),
+                        // Ignored extensions
+                        Some("phpt") => Ok(filename),
                         Some(_) | None => bail!(
                             "this patch modifies a file that is not a c file: {}",
                             filename
@@ -89,6 +96,11 @@ fn main() -> anyhow::Result<()> {
             // TODO: remove unwraps
             let result = single_file_patches
                 .iter()
+                .filter(|patch| {
+                    let file = Path::new(patch_utils::get_patch_original_file(patch, Some(1)));
+                    let ext = file.extension().and_then(|ext| ext.to_str());
+                    ext == Some("c") || ext == Some("h")
+                })
                 .map(|patch| {
                     (
                         patch_utils::get_patch_original_file(patch, Some(1)),
