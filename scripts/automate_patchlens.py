@@ -496,7 +496,7 @@ def main():
 
     db.close()
 
-    print("Completed.")
+    print(f"Completed run {run_started_at}.")
 
 
 if __name__ == "__main__":
