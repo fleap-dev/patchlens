@@ -262,12 +262,12 @@ def collect_cve_data(cve_data_folder, year) -> tuple[list[dict[str, Any]], list[
     for row in cves:
         print(f"\rProcessed {processed} rows...", end="")
         configurations = []
-        if "configurations" in row["cve"]:
-            for cfg in row["cve"]["configurations"]:
-                nodes = cfg["nodes"]
-                for node in nodes:
-                    for match in node["cpeMatch"]:
-                        configurations.append(match["criteria"])
+        if "configurations" in row["cve"] and len(row["cve"]["configurations"]) > 0:
+            cfg = row["cve"]["configurations"][0]
+            nodes = cfg["nodes"]
+            for node in nodes:
+                for match in node["cpeMatch"]:
+                    configurations.append(match["criteria"])
         calculated_product = calculate_probable_product(configurations)
         if calculated_product is None:
             skipped += 1
