@@ -40,6 +40,7 @@ enum Commands {
 #[clap(rename_all = "kebab_case")]
 enum BuildSystemExpander {
     Linux,
+    PHP,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -132,12 +133,18 @@ fn main() -> anyhow::Result<()> {
                         build_expanders::linux::find_required_configs(&git_repo, &file).expect(
                             &format!("failed to find required configs for {}", file.display()),
                         )
-                        // .unwrap_or_else(|e| {
-                        //     eprintln!(
-                        //         "Warning: build flag expansion failed for {file:?}: {e:?}"
-                        //     );
-                        //     Flag::True
-                        // })
+                    });
+                }
+                Some(BuildSystemExpander::PHP) => {
+                    final_flags = final_flags.map_building_flags(|mut file| {
+                        if file.starts_with("/") {
+                            file = file[1..].to_string();
+                        }
+                        let file = git_repo.join(file);
+
+                        build_expanders::php::find_required_configs(&git_repo, &file).expect(
+                            &format!("failed to find required configs for {}", file.display()),
+                        )
                     });
                 }
                 None => {}
