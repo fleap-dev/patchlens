@@ -48,7 +48,10 @@ pub fn find_required_configs(php_root: &Path, target: &Path) -> anyhow::Result<F
                 .context("Path is not a valid extension")?
                 .to_str()
                 .unwrap();
-            let config_path = php_root.join("ext").join(ext_name).join("config.m4");
+            let mut config_path = php_root.join("ext").join(ext_name).join("config.m4");
+            if !config_path.exists() {
+                config_path = php_root.join("ext").join(ext_name).join("config0.m4");
+            }
             analyze_config_file(&config_path, c_filename)
         }
         "sapi" => {
@@ -98,7 +101,7 @@ fn analyze_config_file(config_path: &Path, c_filename: &str) -> anyhow::Result<F
     };
 
     // Step 3: Extract the shell variable from the `if` statement.
-    let var_regex = Regex::new(r#"if test "\$([A-Z0-9_]+)""#)?;
+    let var_regex = Regex::new(r"\$([A-Z0-9_]+)")?;
     let variable_name = var_regex
         .captures(&if_statement)
         .and_then(|c| c.get(1))
@@ -111,7 +114,7 @@ fn analyze_config_file(config_path: &Path, c_filename: &str) -> anyhow::Result<F
         .to_lowercase()
         .replace('_', "-");
     let flag_def_regex = Regex::new(&format!(
-        r"(?s)(PHP_ARG_(?:WITH|ENABLE))\s*\(\s*\[{}\]",
+        r"(?s)(PHP_ARG_(?:WITH|ENABLE))\s*\(\s*\[?{}\]?",
         regex::escape(&flag_short_name)
     ))?;
     let flag_def_match = flag_def_regex
