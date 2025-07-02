@@ -79,6 +79,16 @@ def setup_tables(db: sqlite3.Connection):
             "patch_file" TEXT
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS "flags" (
+            "run_started_at" DATETIME NOT NULL,
+            "patchlens_version" TEXT NOT NULL,
+            "patch_id" TEXT NOT NULL REFERENCES "patches"("id"),
+            "status" TEXT NOT NULL,
+            "flag" TEXT,
+            "error" TEXT
+        )
+    """)
     db.commit()
 
 

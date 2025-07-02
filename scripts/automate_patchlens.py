@@ -68,21 +68,6 @@ class ModifiesHeaderFiles(Exception):
     pass
 
 
-def setup_tables(db: sqlite3.Connection):
-    cursor = db.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS "flags" (
-            "run_started_at" DATETIME NOT NULL,
-            "patchlens_version" TEXT NOT NULL,
-            "patch_id" TEXT NOT NULL REFERENCES "patches"("id"),
-            "status" TEXT NOT NULL,
-            "flag" TEXT,
-            "error" TEXT
-        )
-    """)
-    db.commit()
-
-
 def insert_flags(
     db: sqlite3.Connection,
     flags: List[FlagRow],
@@ -384,8 +369,6 @@ def main():
             return
 
     db = sqlite3.connect(database_file)
-
-    setup_tables(db)
 
     patches = get_patches(db, product)
 
