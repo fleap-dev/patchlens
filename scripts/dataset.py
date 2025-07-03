@@ -10,6 +10,39 @@ import os
 import sqlite3
 
 
+def run_details(db: sqlite3.Connection, run_id: str):
+    query = """
+        WITH run_flags AS (
+            SELECT *
+            FROM flags
+            WHERE run_started_at = ?
+        ),
+        tot AS (
+            SELECT COUNT(*) AS total_flags
+            FROM run_flags
+        )
+        SELECT
+            rf.status                             AS status,
+            COUNT(*)                              AS cnt,
+            ROUND( COUNT(*) * 1.0 / tot.total_flags , 4 )  AS pct
+        FROM run_flags AS rf
+        CROSS JOIN tot
+        GROUP BY rf.status
+        ORDER BY
+            -- put 'ok' first, then errors by descending count
+            CASE WHEN rf.status = 'ok' THEN 0 ELSE 1 END,
+            cnt DESC;
+    """
+
+    cursor = db.cursor()
+    cursor.execute(query, [run_id])
+
+    print(f"Run {run_id}:")
+    for value in cursor.fetchall():
+        percentage = value[2] * 100
+        print(f"- {value[0]} -> {value[1]} ({percentage:.2f}%)")
+
+
 def import_run(src_db: sqlite3.Connection, dst_db: sqlite3.Connection, run_id: str):
     query = """
         SELECT
@@ -111,6 +144,11 @@ def main() -> int:
                 import_run(src_db, db, run_id)
         elif cmd == "runs":
             show_runs(db)
+        elif cmd == "run":
+            p = argparse.ArgumentParser()
+            p.add_argument("run_id", help="ID of the run (run_started_at)")
+            ns = p.parse_args(remaining_args)
+            run_details(db, ns.run_id)
         else:
             print(f"Unknown command {cmd}!")
             return 1
