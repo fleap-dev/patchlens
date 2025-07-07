@@ -7,7 +7,36 @@
 
 import argparse
 import os
+import random
 import sqlite3
+
+
+def random_error(db: sqlite3.Connection, run_id: str):
+    query = """
+        SELECT
+            flags.patchlens_version,
+            flags.patch_id,
+            flags.error
+        FROM flags
+        WHERE
+            flags.run_started_at = ?
+        AND
+            flags.status = 'PatchlensError';
+    """
+
+    cursor = db.cursor()
+    cursor.execute(query, [run_id])
+    choice = random.choice(cursor.fetchall())
+
+    raw_error: str = choice[2]
+    error, _stdout, stderr = raw_error.split("\n")
+
+    print(f"Run {run_id}:")
+    print(f" - Patchlens version: {choice[0]}")
+    print(f" - Patch ID: {choice[1]}")
+    print(f" - Error: {error}")
+    print("---------- STDERR ----------")
+    print(stderr[10:-1].replace("\\n", "\n"))
 
 
 def run_details(db: sqlite3.Connection, run_id: str):
@@ -117,7 +146,9 @@ def main() -> int:
         help="Path to SQLite DB file (default: data/cve-dataset.db)",
     )
     parser.add_argument(
-        "command", choices=["import", "runs", "run"], help="Command to run"
+        "command",
+        choices=["import", "runs", "run", "random_error"],
+        help="Command to run",
     )
 
     args, remaining_args = parser.parse_known_args()
@@ -149,6 +180,11 @@ def main() -> int:
             p.add_argument("run_id", help="ID of the run (run_started_at)")
             ns = p.parse_args(remaining_args)
             run_details(db, ns.run_id)
+        elif cmd == "random_error":
+            p = argparse.ArgumentParser()
+            p.add_argument("run_id", help="ID of the run (run_started_at)")
+            ns = p.parse_args(remaining_args)
+            random_error(db, ns.run_id)
         else:
             print(f"Unknown command {cmd}!")
             return 1
