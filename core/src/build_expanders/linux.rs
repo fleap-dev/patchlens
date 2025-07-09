@@ -92,6 +92,8 @@ pub fn find_required_configs(linux_root: &Path, target: &Path) -> anyhow::Result
         let text = std::fs::read_to_string(&makefile)?;
         let ast = parse_makefile(&text);
 
+        let mut recursion_limit = 100;
+
         // (A) Chase composite lists *repeatedly*
         loop {
             let mut hopped = false;
@@ -118,6 +120,11 @@ pub fn find_required_configs(linux_root: &Path, target: &Path) -> anyhow::Result
                 }
             }
             if !hopped {
+                break;
+            }
+
+            recursion_limit -= 1;
+            if recursion_limit <= 0 {
                 break;
             }
         }
