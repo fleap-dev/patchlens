@@ -41,6 +41,7 @@ enum Commands {
 enum BuildSystemExpander {
     Linux,
     PHP,
+    FFMPEG,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -134,32 +135,31 @@ fn main() -> anyhow::Result<()> {
 
             let mut final_flags = Flag::Or(result);
 
-            match args.build_system_expander {
-                Some(BuildSystemExpander::Linux) => {
-                    final_flags = final_flags.map_building_flags(|mut file| {
-                        if file.starts_with("/") {
-                            file = file[1..].to_string();
-                        }
-                        let file = git_repo.join(file);
+            if let Some(expander) = args.build_system_expander {
+                final_flags = final_flags.map_building_flags(|mut file| {
+                    if file.starts_with("/") {
+                        file = file[1..].to_string();
+                    }
+                    let file = git_repo.join(file);
 
-                        build_expanders::linux::find_required_configs(&git_repo, &file).expect(
-                            &format!("failed to find required configs for {}", file.display()),
-                        )
-                    });
-                }
-                Some(BuildSystemExpander::PHP) => {
-                    final_flags = final_flags.map_building_flags(|mut file| {
-                        if file.starts_with("/") {
-                            file = file[1..].to_string();
+                    match expander {
+                        BuildSystemExpander::Linux => {
+                            build_expanders::linux::find_required_configs(&git_repo, &file).expect(
+                                &format!("failed to find required configs for {}", file.display()),
+                            )
                         }
-                        let file = git_repo.join(file);
-
-                        build_expanders::php::find_required_configs(&git_repo, &file).expect(
-                            &format!("failed to find required configs for {}", file.display()),
-                        )
-                    });
-                }
-                None => {}
+                        BuildSystemExpander::PHP => {
+                            build_expanders::linux::find_required_configs(&git_repo, &file).expect(
+                                &format!("failed to find required configs for {}", file.display()),
+                            )
+                        }
+                        BuildSystemExpander::FFMPEG => {
+                            build_expanders::ffmpeg::find_required_configs(&git_repo, &file).expect(
+                                &format!("failed to find required configs for {}", file.display()),
+                            )
+                        }
+                    }
+                });
             }
 
             println!("{final_flags}");
