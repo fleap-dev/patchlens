@@ -127,7 +127,7 @@ target = ${
     var_name // "TAGS" or "$(obj)/foo.o" etc.
   ~ WS* ~ ":" // the separator
   // zero or more prerequisites
-  ~ WS* ~ (prereq_item ~ WS+)* ~ NEWLINE_OR_EOI // end of the rule‐head
+  ~ (!NEWLINE_OR_EOI ~ ANY)* ~ NEWLINE_OR_EOI // end of the rule‐head
   // now any number of recipe lines (each one must start with a tab)
 }
 

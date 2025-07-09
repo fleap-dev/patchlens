@@ -58,11 +58,12 @@ pub fn find_required_configs(linux_root: &Path, target: &Path) -> anyhow::Result
         };
 
         // Move up
-        current = current
-            .parent()
-            .context("no parent directory")?
-            .to_path_buf();
-        if current == linux_root {
+        if current != linux_root {
+            current = current
+                .parent()
+                .context("no parent directory")?
+                .to_path_buf();
+        } else {
             break;
         }
 
@@ -132,11 +133,14 @@ pub fn find_required_configs(linux_root: &Path, target: &Path) -> anyhow::Result
 }
 
 fn parse_makefile(content: &str) -> BNode {
-    let lines = MakeParser::parse(Rule::file, content)
-        .expect("Failed to parse")
-        .next()
-        .unwrap()
-        .into_inner();
+    let lines = MakeParser::parse(Rule::file, content);
+
+    if let Err(e) = lines {
+        eprintln!("{e}");
+        panic!("Failed to parse makefile!");
+    }
+
+    let lines = lines.unwrap().next().unwrap().into_inner();
 
     let children = parse_makefile_lines(lines.into_iter());
 
