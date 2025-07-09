@@ -67,9 +67,6 @@ fn main() -> anyhow::Result<()> {
             // into individual patches that only affect one file.
             let single_file_patches = mail_utils::parse_mail_patch(&mail_patch_src)
                 .into_iter()
-                .filter(|patch| {
-                    patch_utils::get_patch_original_file(patch, Some(1)).ends_with(".c")
-                })
                 .collect::<Vec<_>>();
 
             // Verify if the patch file only modify .c files
@@ -83,7 +80,6 @@ fn main() -> anyhow::Result<()> {
                         .and_then(std::ffi::OsStr::to_str)
                     {
                         Some("c") => Ok(filename),
-                        Some("h") => Ok(filename),
                         // Ignored extensions
                         Some("phpt") => Ok(filename),
                         Some(_) | None => bail!(
