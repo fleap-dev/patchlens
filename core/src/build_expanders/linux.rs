@@ -29,89 +29,76 @@ pub fn find_required_configs(linux_root: &Path, target: &Path) -> anyhow::Result
     ensure!(linux_root.is_dir(), "linux root is not a directory");
     ensure!(target.is_file(), "target file does not exist");
 
-    let ext = target.extension().map(|s| s.to_str()).flatten();
+    if target.extension().and_then(OsStr::to_str) == Some("h") {
+        bail!("flag expansion for header files is still not implemented");
+    }
 
-    ensure!(
-        ext != Some("h"),
-        "flag expansion for header files is still not implemented"
-    );
-
-    // 2) Normalize paths
+    // 2) Normalize
     let linux_root = linux_root.canonicalize()?;
+    let arch_root = linux_root.join("arch");
     let mut current = target.canonicalize()?;
     let mut conditions = Vec::new();
 
-    let mut arch_root = linux_root.clone();
-    arch_root.push("arch");
-
-    // 3) Climb until we hit the repo root
-    loop {
-        // Derive the “make” object name for this file/dir
+    // 3) Climb up until we reach linux_root
+    while current != linux_root {
+        // Derive make_target
         let base = current
             .file_name()
-            .context("target has no filename")?
-            .to_str()
-            .context("filename not valid UTF-8")?;
+            .and_then(OsStr::to_str)
+            .context("target has no filename")?;
         let mut make_target = if current.is_dir() {
             format!("{base}/")
-        } else if current.extension().and_then(OsStr::to_str) == Some("c") {
-            format!("{}.o", base.strip_suffix(".c").unwrap())
         } else {
-            bail!("unknown target format: {:?}", current);
+            format!("{}.o", base.strip_suffix(".c").unwrap())
         };
 
-        // Move up
-        if current != linux_root {
-            current = current
-                .parent()
-                .context("no parent directory")?
-                .to_path_buf();
-        } else {
-            break;
-        }
+        // Move up one directory
+        current = current
+            .parent()
+            .context("no parent directory")?
+            .to_path_buf();
 
-        eprintln!("Checking {current:?} -> {make_target}");
+        eprintln!("Checking {current:?} → {make_target}");
 
-        // Root special cases
+        // Skip /lib and /arch at the very top
         if current == linux_root {
-            match make_target.as_str() {
-                "lib/" => continue,
-                "arch/" => continue,
-                _ => {}
+            if make_target == "lib/" || make_target == "arch/" {
+                continue;
             }
+        // Emit ARCH=… when inside arch/<ARCH>
         } else if current == arch_root {
-            conditions.push(Flag::Equal(
-                "ARCH".to_string(),
-                make_target[..make_target.len() - 1].to_string(),
-            ));
+            // strip trailing '/'
+            let arch_name = make_target.trim_end_matches('/');
+            conditions.push(Flag::Equal("ARCH".into(), arch_name.into()));
             continue;
         }
 
-        // Parse this directory’s Makefile/Kbuild
+        // Parse this directory’s Kbuild/Makefile
         let makefile = find_makefile(&current).context("no Makefile/Kbuild here")?;
         let text = std::fs::read_to_string(&makefile)?;
         let ast = parse_makefile(&text);
 
-        let mut recursion_limit = 100;
+        // — Step A: chase composite-lists (unchanged) —
 
-        // (A) Chase composite lists *repeatedly*
-        loop {
+        let mut hops_remaining = 100; // Avoid cyclic references
+
+        while hops_remaining > 0 {
             let mut hopped = false;
             for node in &ast.children {
-                if let BNodeDetails::Assignment { name, value, .. } = &node.details {
-                    // Case 1: name ends with "-objs"
-                    if let Some(base_name) = name.strip_suffix("-objs") {
+                if let BNodeDetails::Assignment { name, value } = &node.details {
+                    // static “-objs” lists
+                    if let Some(parent) = name.strip_suffix("-objs") {
                         if value.iter().any(|v| v == &make_target) {
-                            // e.g. `nfc-objs := ... klee.o ...`
                             conditions.push(node.condition.clone());
-                            make_target = format!("{base_name}.o");
+                            make_target = format!("{parent}.o");
                             hopped = true;
-                            break;
+                            break; // breaks out of `for node in…`
                         }
                     }
-                    // Case 2: dynamic composite from regex parse (name != "obj" && not "-objs")
-                    else if name != "obj" && value.iter().any(|v| v == &make_target) {
-                        // e.g. `klee-$(CONFIG_AIBT) := aibt.o` parsed as name="klee"
+                    // dynamic composite lists
+                    else if (name != "obj" && name != "lib")
+                        && value.iter().any(|v| v == &make_target)
+                    {
                         conditions.push(node.condition.clone());
                         make_target = format!("{name}.o");
                         hopped = true;
@@ -122,39 +109,44 @@ pub fn find_required_configs(linux_root: &Path, target: &Path) -> anyhow::Result
             if !hopped {
                 break;
             }
-
-            recursion_limit -= 1;
-            if recursion_limit <= 0 {
-                break;
-            }
+            hops_remaining -= 1;
         }
 
-        // (B) Now pick up the `obj += make_target` guard
-        let mut found_obj = false;
-        for node in &ast.children {
-            if let BNodeDetails::Assignment { name, value, .. } = &node.details {
-                if name == "obj" && value.iter().any(|v| v == &make_target) {
-                    conditions.push(node.condition.clone());
-                    found_obj = true;
-                    break;
+        // — Step B: collect *all* `obj += make_target` guards in this dir —
+        let obj_guards: Vec<Flag> = ast
+            .children
+            .iter()
+            .filter_map(|node| {
+                if let BNodeDetails::Assignment { name, value } = &node.details {
+                    if (name == "obj" || name == "lib") && value.iter().any(|v| v == &make_target) {
+                        return Some(node.condition.clone());
+                    }
                 }
-            }
-        }
+                None
+            })
+            .collect();
 
         ensure!(
-            found_obj,
-            "could not find either composite-list or `obj += {}` in {:?}",
+            !obj_guards.is_empty(),
+            "could not find `obj += {}` in {:?}",
             make_target,
             makefile
         );
+
+        // If there’s more than one guard, OR them; otherwise push the single one
+        if obj_guards.len() == 1 {
+            conditions.push(obj_guards.into_iter().next().unwrap());
+        } else {
+            conditions.push(Flag::Or(obj_guards));
+        }
     }
 
-    // 4) Conjoin (or return True)
-    if conditions.is_empty() {
-        Ok(Flag::True)
+    // 4) Conjoin (or True)
+    Ok(if conditions.is_empty() {
+        Flag::True
     } else {
-        Ok(Flag::And(conditions))
-    }
+        Flag::And(conditions)
+    })
 }
 
 fn parse_makefile(content: &str) -> BNode {
