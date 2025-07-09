@@ -41,6 +41,9 @@ pub fn find_required_configs(linux_root: &Path, target: &Path) -> anyhow::Result
     let mut current = target.canonicalize()?;
     let mut conditions = Vec::new();
 
+    let mut arch_root = linux_root.clone();
+    arch_root.push("arch");
+
     // 3) Climb until we hit the repo root
     loop {
         // Derive the “make” object name for this file/dir
@@ -68,6 +71,21 @@ pub fn find_required_configs(linux_root: &Path, target: &Path) -> anyhow::Result
         }
 
         eprintln!("Checking {current:?} -> {make_target}");
+
+        // Root special cases
+        if current == linux_root {
+            match make_target.as_str() {
+                "lib/" => continue,
+                "arch/" => continue,
+                _ => {}
+            }
+        } else if current == arch_root {
+            conditions.push(Flag::Equal(
+                "ARCH".to_string(),
+                make_target[..make_target.len() - 1].to_string(),
+            ));
+            continue;
+        }
 
         // Parse this directory’s Makefile/Kbuild
         let makefile = find_makefile(&current).context("no Makefile/Kbuild here")?;
