@@ -83,4 +83,7 @@ impl Flag {
             _ => self,
         }
     }
+    pub fn not(self) -> Self {
+        Flag::Not(Box::new(self))
+    }
 }

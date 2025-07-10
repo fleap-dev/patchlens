@@ -6,7 +6,7 @@
 // mark these silent so they don’t appear in the parse tree
 WHITESPACE     = _{ " " | "\t" }
 COMMENT        = _{ "#" ~ (!"\n" ~ ANY)* }
-NEWLINE        = _{ "\n" }
+NEWLINE        = _{ WHITESPACE* ~ COMMENT? ~ "\n" }
 NEWLINE_OR_EOI = _{ NEWLINE | EOI }
 
 // ——————————————————————————————————————————————————————————
@@ -14,7 +14,11 @@ NEWLINE_OR_EOI = _{ NEWLINE | EOI }
 file = ${ SOI ~ line* ~ EOI }
 line = _{
     command_line
-  | (WHITESPACE* ~ (blank_line | define_stmt | include_stmt | variability_block | list_assignment | function_stmt | assignment | target))
+  | (WHITESPACE* ~ (blank_line | export_stmt | define_stmt | include_stmt | variability_block | list_assignment | function_stmt | assignment | no_op_target | target))
+}
+
+export_stmt = {
+    "export" ~ (!NEWLINE ~ ANY)* ~ NEWLINE_OR_EOI
 }
 
 function_stmt = _{
@@ -29,47 +33,34 @@ blank_line = _{ (WHITESPACE | COMMENT)* ~ NEWLINE }
 
 // ——————————————————————————————————————————————————————————
 // 3. Include
-include_stmt =  { "include " ~ path ~ NEWLINE }
+include_stmt =  { "-"? ~ "include " ~ path ~ NEWLINE }
 path         = @{ (!NEWLINE ~ ANY)+ }
 
 // ——————————————————————————————————————————————————————————
 // 4. Variability / conditional blocks
 
-variability_block = {
-    variability_block_main ~ variability_block_alternative? ~ endif_stmt
+variability_block = ${
+    variability_block_command ~ WHITESPACE ~ variability_expression ~ NEWLINE ~ variability_block_body ~ (WHITESPACE | NEWLINE)* ~ else_block? ~ (WHITESPACE | NEWLINE)* ~ "endif"
 }
 
-variability_block_main = {
-    (ifeq_stmt | ifneq_stmt | ifdef_stmt | ifndef_stmt) ~ line*
-}
-
-// either an `else if…` _or_ a plain `else`
-variability_block_alternative = {
-    else_if_block
-  | else_block
-}
-
-// catch "else ifeq(...)" / "else ifneq(...)" / "else ifdef ..." / "else ifndef ..."
-else_if_block = {
-    "else" ~ WHITESPACE+ ~ (ifeq_stmt | ifneq_stmt | ifdef_stmt | ifndef_stmt) ~ line*
-}
-
-// catch a plain "else" with its own body
 else_block = {
     "else" ~ WHITESPACE* ~ NEWLINE ~ line*
 }
 
-ifeq_stmt  = ${ "ifeq" ~ WS* ~ "(" ~ WS* ~ ifeq_param? ~ WS* ~ "," ~ WS* ~ ifeq_param? ~ WS* ~ ")" ~ WS* ~ NEWLINE_OR_EOI }
-ifneq_stmt = ${ "ifneq" ~ WS* ~ "(" ~ WS* ~ ifeq_param? ~ WS* ~ "," ~ WS* ~ ifeq_param? ~ WS* ~ ")" ~ WS* ~ NEWLINE_OR_EOI }
+variability_block_command = {
+    "ifdef"
+  | "ifeq"
+  | "ifndef"
+  | "ifneq"
+}
 
-// a comma- or right-paren-delimited sequence of nested expansions & other chars
-ifeq_param = @{ (var_expansion | !("," | ")") ~ ANY)+ }
+variability_expression = {
+    (!NEWLINE ~ ANY)*
+}
 
-ifdef_stmt  =  { "ifdef" ~ WHITESPACE* ~ var_name ~ WHITESPACE* ~ NEWLINE }
-ifndef_stmt =  { "ifndef" ~ WHITESPACE* ~ var_name ~ WHITESPACE* ~ NEWLINE }
-endif_stmt  = @{ "endif" ~ (WHITESPACE | COMMENT)* ~ NEWLINE }
-
-// IFEQVALUE = { var_expansion | ident }
+variability_block_body = {
+    line*
+}
 
 // ——————————————————————————————————————————————————————————
 // 5. List assignments (obj-y, drivers-m, etc.)
@@ -98,7 +89,7 @@ subdir          = @{ (ASCII_ALPHANUMERIC | "-" | "_" | "/")* ~ "/" }
 assignment       =  {
     var_name ~ ws_cont* ~ assignment_op ~ ws_cont* ~ assignment_value ~ NEWLINE_OR_EOI
 }
-var_name         = @{ (var_expansion | ident)+ }
+var_name         = @{ (var_expansion | ident | "%" | ".")+ }
 assignment_op    = @{ ":=" | "+=" | "?=" | "=" }
 assignment_value = @{ (continuation | (!NEWLINE ~ ANY))* }
 continuation     = @{ "\\" ~ NEWLINE ~ WHITESPACE* }
@@ -122,17 +113,19 @@ var_inner = _{ var_expansion | !(")" | "}") ~ ANY }
 // ——————————————————————————————————————————————————————————
 // 8. Stubbed targets (Kbuild doesn’t really use them, but just in case)
 
+// E.g. `.config .kconfig.d: ;`
+no_op_target = ${
+    var_name ~ (WHITESPACE+ ~ var_name)* ~ WHITESPACE* ~ ":" ~ WHITESPACE+ ~ ";" ~ NEWLINE_OR_EOI
+}
+
 // A target with zero-or-more prerequisites, then zero-or-more indented recipe lines
 target = ${
-    var_name // "TAGS" or "$(obj)/foo.o" etc.
+    var_name ~ (WHITESPACE+ ~ var_name)* // "TAGS" or "$(obj)/foo.o" etc.
   ~ WS* ~ ":" // the separator
   // zero or more prerequisites
   ~ (!NEWLINE_OR_EOI ~ ANY)* ~ NEWLINE_OR_EOI // end of the rule‐head
   // now any number of recipe lines (each one must start with a tab)
 }
-
-// what can appear after the colon
-prereq_item = @{ (var_expansion | ident | subdir)+ }
 
 // A recipe line must start with a TAB, then the shell command, then a newline
 command_line = @{ "\t" ~ (!NEWLINE ~ ANY)* ~ NEWLINE_OR_EOI }
@@ -140,17 +133,13 @@ command_line = @{ "\t" ~ (!NEWLINE ~ ANY)* ~ NEWLINE_OR_EOI }
 // ——————————————————————————————————————————————————————————
 // 9. Helpers
 
-define_stmt = _{
-    "define" ~ WHITESPACE* ~ var_name ~ NEWLINE // header
-  ~ define_line* // body (zero or more lines)
-  ~ "endef" ~ (WHITESPACE | COMMENT)* ~ NEWLINE_OR_EOI // footer
+define_stmt = {
+    SOI? // optional start-of-input (if you want to allow multiple stmts)
+  ~ "define" ~ WHITESPACE+ ~ var_name ~ NEWLINE ~ define_body ~ "endef" ~ NEWLINE_OR_EOI
 }
 
-/// One line inside a `define` must consume at least one real newline:
-define_line = _{
-    continuation // “\” + newline
-
-  | (!NEWLINE ~ ANY)+ ~ NEWLINE
+define_body = _{
+    (!("endef") ~ ANY)* // anything up until the literal "endef"
 }
 
 ASCII_ALPHANUMERIC = _{ 'a'..'z' | 'A'..'Z' | '0'..'9' }

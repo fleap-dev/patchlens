@@ -24,7 +24,37 @@ struct BNode {
     condition: Flag,
 }
 
-pub fn find_required_configs(linux_root: &Path, target: &Path) -> anyhow::Result<Flag> {
+#[derive(Clone, Debug)]
+struct FlatAssign {
+    name: String,
+    value: Vec<String>,
+    condition: Flag,
+}
+
+pub trait KBuildReader {
+    fn read(path: &Path) -> anyhow::Result<String>;
+}
+
+struct NaiveKBuildReader;
+
+impl KBuildReader for NaiveKBuildReader {
+    fn read(path: &Path) -> anyhow::Result<String> {
+        std::fs::read_to_string(path).context("failed to read Kbuild file")
+    }
+}
+
+pub fn find_required_configs<R: KBuildReader>(
+    linux_root: &Path,
+    target: &Path,
+) -> anyhow::Result<Flag> {
+    find_required_configs_with_reader::<NaiveKBuildReader>(linux_root, target, &["obj", "lib"])
+}
+
+pub fn find_required_configs_with_reader<R: KBuildReader>(
+    linux_root: &Path,
+    target: &Path,
+    included_objs: &[&str],
+) -> anyhow::Result<Flag> {
     // 1) Sanity checks
     ensure!(linux_root.is_dir(), "linux root is not a directory");
     ensure!(target.is_file(), "target file does not exist");
@@ -75,8 +105,8 @@ pub fn find_required_configs(linux_root: &Path, target: &Path) -> anyhow::Result
 
         // Parse this directory’s Kbuild/Makefile
         let makefile = find_makefile(&current).context("no Makefile/Kbuild here")?;
-        let text = std::fs::read_to_string(&makefile)?;
-        let ast = parse_makefile(&text);
+        let text = R::read(&makefile).context("Failed to read KBuild file")?;
+        let ast = flatten_makefile(&text);
 
         // — Step A: chase composite-lists (unchanged) —
 
@@ -84,26 +114,24 @@ pub fn find_required_configs(linux_root: &Path, target: &Path) -> anyhow::Result
 
         while hops_remaining > 0 {
             let mut hopped = false;
-            for node in &ast.children {
-                if let BNodeDetails::Assignment { name, value } = &node.details {
-                    // static “-objs” lists
-                    if let Some(parent) = name.strip_suffix("-objs") {
-                        if value.iter().any(|v| v == &make_target) {
-                            conditions.push(node.condition.clone());
-                            make_target = format!("{parent}.o");
-                            hopped = true;
-                            break; // breaks out of `for node in…`
-                        }
-                    }
-                    // dynamic composite lists
-                    else if (name != "obj" && name != "lib")
-                        && value.iter().any(|v| v == &make_target)
-                    {
-                        conditions.push(node.condition.clone());
-                        make_target = format!("{name}.o");
+            for assign in &ast {
+                // static “-objs” lists
+                if let Some(parent) = assign.name.strip_suffix("-objs") {
+                    if assign.value.iter().any(|v| v == &make_target) {
+                        conditions.push(assign.condition.clone());
+                        make_target = format!("{parent}.o");
                         hopped = true;
-                        break;
+                        break; // breaks out of `for node in…`
                     }
+                }
+                // dynamic composite lists
+                else if included_objs.iter().find(|s| *s == &assign.name).is_none()
+                    && assign.value.iter().any(|v| v == &make_target)
+                {
+                    conditions.push(assign.condition.clone());
+                    make_target = format!("{}.o", &assign.name);
+                    hopped = true;
+                    break;
                 }
             }
             if !hopped {
@@ -114,13 +142,12 @@ pub fn find_required_configs(linux_root: &Path, target: &Path) -> anyhow::Result
 
         // — Step B: collect *all* `obj += make_target` guards in this dir —
         let obj_guards: Vec<Flag> = ast
-            .children
             .iter()
-            .filter_map(|node| {
-                if let BNodeDetails::Assignment { name, value } = &node.details {
-                    if (name == "obj" || name == "lib") && value.iter().any(|v| v == &make_target) {
-                        return Some(node.condition.clone());
-                    }
+            .filter_map(|assign| {
+                if included_objs.iter().find(|s| *s == &assign.name).is_some()
+                    && assign.value.iter().any(|v| v == &make_target)
+                {
+                    return Some(assign.condition.clone());
                 }
                 None
             })
@@ -149,23 +176,48 @@ pub fn find_required_configs(linux_root: &Path, target: &Path) -> anyhow::Result
     })
 }
 
-fn parse_makefile(content: &str) -> BNode {
-    let lines = MakeParser::parse(Rule::file, content);
+fn collect_assignments(node: &BNode, ctx: &Flag, out: &mut Vec<FlatAssign>) {
+    // Conjoin the current node’s condition with the incoming context.
+    let effective = match ctx {
+        Flag::True => node.condition.clone(),
+        _ => Flag::And(vec![ctx.clone(), node.condition.clone()]),
+    };
 
-    if let Err(e) = lines {
-        eprintln!("{e}");
-        panic!("Failed to parse makefile!");
+    // If this node is an assignment, emit it
+    if let BNodeDetails::Assignment { name, value } = &node.details {
+        out.push(FlatAssign {
+            name: name.clone(),
+            value: value.clone(),
+            condition: effective.clone(),
+        });
     }
 
-    let lines = lines.unwrap().next().unwrap().into_inner();
+    // Recurse into all children
+    for child in &node.children {
+        collect_assignments(child, &effective, out);
+    }
+}
 
-    let children = parse_makefile_lines(lines.into_iter());
+/// Parse & flatten a Kbuild file into a vector of FlatAssigns
+fn flatten_makefile(content: &str) -> Vec<FlatAssign> {
+    // Parse into the original BNode AST
+    let root_pair = MakeParser::parse(Rule::file, content)
+        .expect("Failed to parse Kbuild")
+        .next()
+        .unwrap();
 
-    BNode {
+    let mut root = BNode {
         details: BNodeDetails::Makefile,
-        children: children,
         condition: Flag::True,
-    }
+        children: Vec::new(),
+    };
+    // Build children via your existing `parse_makefile_lines` logic:
+    root.children = parse_makefile_lines(root_pair.into_inner());
+
+    // Now collect assignments
+    let mut out = Vec::new();
+    collect_assignments(&root, &Flag::True, &mut out);
+    out
 }
 
 fn parse_makefile_lines<'a>(lines: impl Iterator<Item = Pair<'a, Rule>>) -> Vec<BNode> {
@@ -185,78 +237,77 @@ fn parse_makefile_lines<'a>(lines: impl Iterator<Item = Pair<'a, Rule>>) -> Vec<
 }
 
 fn parse_variability_block(line: Pair<'_, Rule>) -> BNode {
-    // TODO: nested elif blocks are still not implemented
     let mut inner = line.into_inner();
 
-    let mut main_block = inner.next().unwrap().into_inner();
-    let mut alternative_block = inner.next().unwrap().into_inner();
+    let command = inner.next().unwrap().as_str();
 
-    let statement = main_block.next().unwrap();
-    let statement_rule = statement.as_rule();
-    let mut statement_inner = statement.into_inner();
+    let expression = inner.next().unwrap().as_str().trim();
 
-    let condition = match statement_rule {
-        Rule::ifeq_stmt => {
-            let first_param = statement_inner.next().unwrap().as_str().to_string();
-            let second_param = statement_inner
-                .next()
-                .map(|s| s.as_str().to_string())
-                .unwrap_or_default();
-            Flag::Equal(first_param, second_param.as_str().to_string())
+    let body = inner
+        .next()
+        .map(|b| b.into_inner())
+        .map(|b| parse_makefile_lines(b));
+
+    let alternative_body = inner
+        .next()
+        .map(|b| b.into_inner())
+        .map(|b| parse_makefile_lines(b));
+
+    fn parse_eq_expression(expr: &str) -> Option<Flag> {
+        let eq_regex = Regex::new(
+            r#"^\(\s*((?:"(?:[^"\\]|\\.)*"|[^,])*)\s*,\s*((?:"(?:[^"\\]|\\.)*"|.)*?)\s*\)$"#,
+        )
+        .unwrap();
+        let eq_regex_alt =
+            Regex::new(r#"^\s*"((?:[^"\\]|\\.)*)"\s+"((?:[^"\\]|\\.)*)"\s*$"#).unwrap();
+
+        if let Some(cap) = eq_regex.captures(expr) {
+            Some(Flag::Equal(cap[1].to_string(), cap[2].to_string()))
+        } else if let Some(cap) = eq_regex_alt.captures(expr) {
+            Some(Flag::Equal(cap[1].to_string(), cap[2].to_string()))
+        } else {
+            None
         }
-        Rule::ifneq_stmt => {
-            let first_param = statement_inner.next().unwrap().as_str().to_string();
-            let second_param = statement_inner
-                .next()
-                .map(|s| s.as_str().to_string())
-                .unwrap_or_default();
-            Flag::Not(Box::new(Flag::Equal(
-                first_param.as_str().to_string(),
-                second_param.as_str().to_string(),
-            )))
+    }
+
+    let condition = match command {
+        "ifdef" => {
+            let condition = expression.trim().to_owned();
+            Flag::Defined(condition)
         }
-        Rule::ifdef_stmt => {
-            let var_name = statement_inner.next().unwrap().as_str().to_owned();
-            Flag::Defined(var_name)
+        "ifndef" => {
+            let condition = expression.trim().to_owned();
+            Flag::Defined(condition).not()
         }
-        Rule::ifndef_stmt => {
-            let var_name = statement_inner.next().unwrap().as_str().to_owned();
-            Flag::Not(Box::new(Flag::Defined(var_name)))
-        }
-        _ => unreachable!(),
+        "ifeq" => parse_eq_expression(expression)
+            .expect(&format!("Failed to parse ifeq expression: {expression}")),
+        "ifneq" => parse_eq_expression(expression)
+            .map(|e| e.not())
+            .expect(&format!("Failed to parse ifeq expression: {expression}")),
+        _ => unimplemented!("unknown if macro: {command}"),
     };
 
-    let main_lines = parse_makefile_lines(main_block);
-
-    let alternative_lines = if alternative_block.len() > 0 {
-        let _else_stmt = alternative_block.next().unwrap();
-
-        parse_makefile_lines(alternative_block)
-    } else {
-        Vec::new()
-    };
-
-    let main_node = BNode {
+    let main_node = body.map(|b| BNode {
         details: BNodeDetails::VariabilityBlock {},
-        children: main_lines,
+        children: b,
         condition: condition.clone(),
-    };
+    });
 
-    if alternative_lines.is_empty() {
-        main_node
-    } else {
-        let alternative_node = BNode {
-            details: BNodeDetails::VariabilityBlock {},
-            children: alternative_lines,
-            condition: Flag::Not(Box::new(condition)),
-        };
+    let alternative_node = alternative_body.map(|b| BNode {
+        details: BNodeDetails::VariabilityBlock {},
+        children: b,
+        condition: condition.not(),
+    });
 
-        // Wrapper
-        BNode {
+    match (main_node, alternative_node) {
+        (Some(m), None) => m,
+        (None, Some(a)) => a,
+        (Some(m), Some(a)) => BNode {
             details: BNodeDetails::VariabilityBlock {},
-            children: vec![main_node, alternative_node],
+            children: vec![m, a],
             condition: Flag::True,
-        }
+        },
+        _ => unreachable!(),
     }
 }
 
@@ -290,9 +341,13 @@ fn parse_assignment(line: Pair<'_, Rule>) -> BNode {
     };
 
     let _assignment_op = inner.next().unwrap().as_str();
-    let list_val = inner
-        .next()
-        .unwrap()
+    let mut list_val = inner.next().unwrap();
+
+    while matches!(list_val.as_rule(), Rule::continuation) {
+        list_val = inner.next().unwrap();
+    }
+
+    let list_val = list_val
         .as_str()
         .split_whitespace()
         .filter(|dep| *dep != "\\")
@@ -320,138 +375,3 @@ pub fn find_makefile(folder: &Path) -> Option<PathBuf> {
     }
     None
 }
-
-// /// Returns:
-// /// - `None` if the target `.c`→`.o` never appears
-// /// - `Some(groups)` otherwise, where each `groups[i]` is the sorted list
-// ///    of `CONFIG_…` symbols all of which must be enabled (AND) for that
-// ///    particular assignment.  Different `i` are OR’d together.
-// fn find_required_configs(makefile_content: &str, target_c: &str) -> Option<Flag> {
-//     let file = MakeParser::parse(Rule::file, makefile_content)
-//         .expect("Failed to parse")
-//         .next()
-//         .unwrap();
-
-//     // collect all assignments
-//     let mut assigns = Vec::new();
-//     for pair in file.into_inner() {
-//         collect_assignments(pair, &mut Vec::new(), &mut assigns);
-//     }
-
-//     // normalize
-//     let target_o = target_c
-//         .strip_suffix(".c")
-//         .map(|b| format!("{}.o", b))
-//         .unwrap_or_else(|| format!("{}.o", target_c));
-
-//     // gather each assignment’s guard‐set if it references our target
-//     let mut raw_groups = Vec::new();
-//     for a in assigns {
-//         if a.rhs_literals.iter().any(|lit| lit == &target_o) {
-//             // take only positive guards (strip off any "!CONFIG_X")
-//             let group: BTreeSet<String> = a
-//                 .guarded_by
-//                 .into_iter()
-//                 .filter(|g| !g.starts_with('!'))
-//                 .collect();
-//             // produce a sorted Vec
-//             raw_groups.push(group.into_iter().collect::<Vec<_>>());
-//         }
-//     }
-
-//     if raw_groups.is_empty() {
-//         return None;
-//     }
-
-//     // dedupe identical guard‐sets
-//     raw_groups.sort();
-//     raw_groups.dedup();
-
-//     // If there is exactly one group, but it’s empty, that means unguarded
-//     if raw_groups.len() == 1 && raw_groups[0].is_empty() {
-//         return Some(Flag::True);
-//     } else {
-//         let alts: Vec<Flag> = raw_groups
-//             .into_iter()
-//             .map(|grp| {
-//                 if grp.len() == 1 {
-//                     Flag::Defined(grp[0].clone())
-//                 } else {
-//                     Flag::And(grp.into_iter().map(|s| Flag::Defined(s)).collect())
-//                 }
-//             })
-//             .collect();
-//         Some(Flag::Or(alts))
-//     }
-// }
-
-// fn collect_assignments(pair: Pair<Rule>, context: &mut Vec<String>, assigns: &mut Vec<Assignment>) {
-//     match pair.as_rule() {
-//         Rule::assignment => {
-//             let mut inner = pair.into_inner();
-//             let lhs = inner.next().unwrap();
-//             let _op = inner.next().unwrap();
-//             let rhs = inner.next().unwrap();
-
-//             // LHS guards from var-expansions $(CONFIG_X)
-//             let mut guarded_by: Vec<String> = lhs
-//                 .clone()
-//                 .into_inner()
-//                 .filter_map(|p| {
-//                     if p.as_rule() == Rule::var_expansion {
-//                         let ident = p.into_inner().next().unwrap().as_str();
-//                         Some(ident.to_string())
-//                     } else {
-//                         None
-//                     }
-//                 })
-//                 .collect();
-
-//             // plus any enclosing ifdef/ifndef context
-//             for g in context.iter() {
-//                 guarded_by.push(g.clone());
-//             }
-
-//             // RHS literal tokens
-//             let rhs_literals = rhs
-//                 .into_inner()
-//                 .filter_map(|p| match p.as_rule() {
-//                     Rule::var_name => {
-//                         let s = p.as_str().to_string();
-//                         if s.starts_with("$(") || s.starts_with("${") {
-//                             None
-//                         } else {
-//                             Some(s)
-//                         }
-//                     }
-//                     _ => None,
-//                 })
-//                 .collect();
-
-//             assigns.push(Assignment {
-//                 guarded_by,
-//                 rhs_literals,
-//             });
-//         }
-
-//         Rule::variability_block => {
-//             let mut inner = pair.into_inner();
-//             let cmd = inner.next().unwrap(); // "ifdef" or "ifndef"
-//             let expr = inner.next().unwrap(); // e.g. "CONFIG_FOO"
-
-//             let mut new_ctx = context.clone();
-//             let var = expr.as_str().to_string();
-//             match cmd.as_str() {
-//                 "ifdef" => new_ctx.push(var),
-//                 "ifndef" => new_ctx.push(format!("!{}", var)),
-//                 _ => {}
-//             }
-
-//             for child in inner {
-//                 collect_assignments(child, &mut new_ctx, assigns);
-//             }
-//         }
-
-//         _ => {}
-//     }
-// }
