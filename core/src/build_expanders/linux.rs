@@ -43,10 +43,7 @@ impl KBuildReader for NaiveKBuildReader {
     }
 }
 
-pub fn find_required_configs<R: KBuildReader>(
-    linux_root: &Path,
-    target: &Path,
-) -> anyhow::Result<Flag> {
+pub fn find_required_configs(linux_root: &Path, target: &Path) -> anyhow::Result<Flag> {
     find_required_configs_with_reader::<NaiveKBuildReader>(linux_root, target, &["obj", "lib"])
 }
 
