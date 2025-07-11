@@ -14,11 +14,15 @@ NEWLINE_OR_EOI = _{ NEWLINE | EOI }
 file = ${ SOI ~ line* ~ EOI }
 line = _{
     command_line
-  | (WHITESPACE* ~ (blank_line | export_stmt | define_stmt | include_stmt | variability_block | list_assignment | function_stmt | assignment | no_op_target | target))
+  | (WHITESPACE* ~ (blank_line | export_stmt | unexport_stmt | define_stmt | include_stmt | variability_block | list_assignment | function_stmt | assignment | no_op_target | target))
 }
 
 export_stmt = {
     "export" ~ (!NEWLINE ~ ANY)* ~ NEWLINE_OR_EOI
+}
+
+unexport_stmt = {
+    "unexport" ~ (!NEWLINE ~ ANY)* ~ NEWLINE_OR_EOI
 }
 
 function_stmt = _{

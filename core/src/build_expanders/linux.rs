@@ -362,7 +362,7 @@ fn parse_assignment(line: Pair<'_, Rule>) -> BNode {
 }
 
 pub fn find_makefile(folder: &Path) -> Option<PathBuf> {
-    let names = ["Kbuild", "Kbuild.src", "Makefile"];
+    let names = ["Makefile", "Kbuild", "Kbuild.src"];
 
     for name in &names {
         let candidate = folder.join(name);
