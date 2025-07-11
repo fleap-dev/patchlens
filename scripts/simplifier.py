@@ -67,6 +67,14 @@ class ExpressionSimplifier:
             if var_name not in self.z3_vars:
                 self.z3_vars[var_name] = z3.Bool(var_name)
             return self.z3_vars[var_name]
+        elif (
+            isinstance(node, ast.Compare)
+            and isinstance(node.left, ast.Name)
+            and isinstance(node.comparators, ast.Name)
+            and len(node.ops) == 1
+            and isinstance(node.ops[0], ast.Eq)
+        ):
+            return z3.Bool(f"{node.left.id} = {node.comparators.id}")
         else:
             raise ValueError(f"Unsupported AST node: {ast.dump(node)}")
 
