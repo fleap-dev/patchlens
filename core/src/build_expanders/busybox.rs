@@ -59,5 +59,6 @@ pub fn find_required_configs(linux_root: &Path, target: &Path) -> anyhow::Result
         linux_root,
         target,
         &["obj", "lib", "core", "libs"],
+        &[],
     )
 }

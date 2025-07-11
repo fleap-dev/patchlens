@@ -44,13 +44,41 @@ impl KBuildReader for NaiveKBuildReader {
 }
 
 pub fn find_required_configs(linux_root: &Path, target: &Path) -> anyhow::Result<Flag> {
-    find_required_configs_with_reader::<NaiveKBuildReader>(linux_root, target, &["obj", "lib"])
+    find_required_configs_with_reader::<NaiveKBuildReader>(
+        linux_root,
+        target,
+        &["obj", "lib"],
+        &[
+            // Before linux 5750121, root files were specified inside Makefile.
+            // After that, they moved into the root KBuild using the obj-y syntax.
+            ("init/", Flag::True),
+            ("usr/", Flag::True),
+            ("arch/", Flag::True),
+            ("kernel/", Flag::True),
+            ("certs/", Flag::True),
+            ("mm/", Flag::True),
+            ("fs/", Flag::True),
+            ("ipc/", Flag::True),
+            ("security/", Flag::True),
+            ("crypto/", Flag::True),
+            ("block/", Flag::defined("CONFIG_BLOCK")),
+            ("io_uring/", Flag::defined("CONFIG_IO_URING")),
+            ("rust/", Flag::defined("CONFIG_RUST")),
+            ("drivers/", Flag::True),
+            ("sound/", Flag::True),
+            ("samples/", Flag::defined("CONFIG_SAMPLES")),
+            ("net/", Flag::defined("CONFIG_NET")),
+            ("virt/", Flag::True),
+            ("lib/", Flag::True),
+        ],
+    )
 }
 
 pub fn find_required_configs_with_reader<R: KBuildReader>(
     linux_root: &Path,
     target: &Path,
     included_objs: &[&str],
+    root_target_conditions: &[(&str, Flag)],
 ) -> anyhow::Result<Flag> {
     // 1) Sanity checks
     ensure!(linux_root.is_dir(), "linux root is not a directory");
@@ -89,7 +117,8 @@ pub fn find_required_configs_with_reader<R: KBuildReader>(
 
         // Skip /lib and /arch at the very top
         if current == linux_root {
-            if make_target == "lib/" || make_target == "arch/" {
+            if let Some(cond) = root_target_conditions.iter().find(|c| c.0 == &make_target) {
+                conditions.push(cond.1.clone());
                 continue;
             }
         // Emit ARCH=… when inside arch/<ARCH>
@@ -362,7 +391,7 @@ fn parse_assignment(line: Pair<'_, Rule>) -> BNode {
 }
 
 pub fn find_makefile(folder: &Path) -> Option<PathBuf> {
-    let names = ["Makefile", "Kbuild", "Kbuild.src"];
+    let names = ["Kbuild", "Kbuild.src", "Makefile"];
 
     for name in &names {
         let candidate = folder.join(name);

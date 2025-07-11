@@ -86,4 +86,7 @@ impl Flag {
     pub fn not(self) -> Self {
         Flag::Not(Box::new(self))
     }
+    pub fn defined(s: impl Into<String>) -> Self {
+        Flag::Defined(s.into())
+    }
 }
