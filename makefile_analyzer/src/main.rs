@@ -16,7 +16,7 @@ fn main() {
 
     match patchlens::build_expanders::linux::find_required_configs(&args.linux_root, &args.c_file) {
         Err(e) => {
-            eprintln!("▶ Failed to find configs for {:?}: {e:?}", args.c_file);
+            eprintln!("▶ Failed to find configs for {:?}: {e}", args.c_file);
             std::process::exit(1);
         }
         Ok(flag) => {
