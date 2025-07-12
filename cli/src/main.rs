@@ -42,6 +42,7 @@ enum BuildSystemExpander {
     Linux,
     PHP,
     FFMPEG,
+    Busybox,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -153,6 +154,13 @@ fn main() -> anyhow::Result<()> {
                             build_expanders::ffmpeg::find_required_configs(&git_repo, &file).expect(
                                 &format!("failed to find required configs for {}", file.display()),
                             )
+                        }
+                        BuildSystemExpander::Busybox => {
+                            build_expanders::busybox::find_required_configs(&git_repo, &file)
+                                .expect(&format!(
+                                    "failed to find required configs for {}",
+                                    file.display()
+                                ))
                         }
                     }
                 });
