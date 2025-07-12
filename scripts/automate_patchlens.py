@@ -381,6 +381,9 @@ def main():
     total = len(patches)
     for patch in patches:
         try:
+            print(
+                f"Processing {patch.patch_file if patch.patch_file else patch.github_patch_url} for {patch.cve_id}"
+            )
             result = process_patch(
                 repository_path,
                 patch,
