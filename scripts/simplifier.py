@@ -69,13 +69,13 @@ class ExpressionSimplifier:
             return self.z3_vars[var_name]
         elif (
             isinstance(node, ast.Compare)
-            and isinstance(node.left, ast.Name)
+            and isinstance(node.left, ast.Constant)
             and len(node.comparators) == 1
-            and isinstance(node.comparators[0], ast.Name)
+            and isinstance(node.comparators[0], ast.Constant)
             and len(node.ops) == 1
             and isinstance(node.ops[0], ast.Eq)
         ):
-            return z3.Bool(f"{node.left.id} = {node.comparators[0].id}")
+            return z3.Bool(f"{node.left.value} = {node.comparators[0].value}")
         else:
             raise ValueError(f"Unsupported AST node: {ast.dump(node)}")
 

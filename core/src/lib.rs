@@ -185,6 +185,10 @@ fn parse_if_macro_condition(condition: Node, source: &str) -> Flag {
             }
         }
         "parenthesized_expression" => parse_if_macro_condition(condition.child(1).unwrap(), source),
+        "identifier" => {
+            let content = condition.utf8_text(source.as_bytes()).unwrap();
+            Flag::Defined(content.to_string())
+        }
         _ => panic!("unknown expression inside if macro: {}", condition.kind()),
     }
 }
