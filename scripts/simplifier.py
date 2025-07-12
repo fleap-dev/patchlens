@@ -70,11 +70,12 @@ class ExpressionSimplifier:
         elif (
             isinstance(node, ast.Compare)
             and isinstance(node.left, ast.Name)
-            and isinstance(node.comparators, ast.Name)
+            and len(node.comparators) == 1
+            and isinstance(node.comparators[0], ast.Name)
             and len(node.ops) == 1
             and isinstance(node.ops[0], ast.Eq)
         ):
-            return z3.Bool(f"{node.left.id} = {node.comparators.id}")
+            return z3.Bool(f"{node.left.id} = {node.comparators[0].id}")
         else:
             raise ValueError(f"Unsupported AST node: {ast.dump(node)}")
 
