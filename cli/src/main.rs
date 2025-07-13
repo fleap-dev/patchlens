@@ -146,7 +146,7 @@ fn main() -> anyhow::Result<()> {
                             )
                         }
                         BuildSystemExpander::PHP => {
-                            build_expanders::linux::find_required_configs(&git_repo, &file).expect(
+                            build_expanders::php::find_required_configs(&git_repo, &file).expect(
                                 &format!("failed to find required configs for {}", file.display()),
                             )
                         }
