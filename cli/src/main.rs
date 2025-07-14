@@ -4,6 +4,8 @@ use patchlens::logical_utils::Flag;
 use patchlens::{
     analyze_variants_affected, build_expanders, mail_utils, patch_utils, preprocessor,
 };
+use std::char::ToLowercase;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
@@ -75,18 +77,23 @@ fn main() -> anyhow::Result<()> {
             single_file_patches
                 .iter()
                 .map(|patch| patch_utils::get_patch_original_file(patch, Some(1)))
+                .map(|f| f.to_lowercase())
                 .map(|filename| {
-                    match Path::new(filename)
-                        .extension()
-                        .and_then(std::ffi::OsStr::to_str)
-                    {
-                        Some("c") => Ok(filename),
-                        // Ignored extensions
-                        Some("phpt") => Ok(filename),
-                        Some(_) | None => bail!(
-                            "this patch modifies a file that is not a c file: {}",
-                            filename
-                        ),
+                    match filename.as_str() {
+                        "/news" | "/changelog" | "readme" => Ok(filename),
+                        _ => {
+                            let ext = Path::new(&filename).extension().and_then(OsStr::to_str);
+                            match ext.as_deref() {
+                                Some("c") => Ok(filename),
+                                // Ignored extensions
+                                Some("phpt") => Ok(filename),
+                                Some("md") => Ok(filename),
+                                Some(_) | None => bail!(
+                                    "this patch modifies a file that is not a c file: {}",
+                                    filename
+                                ),
+                            }
+                        }
                     }
                 })
                 .collect::<Result<Vec<_>, _>>()?;
