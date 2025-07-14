@@ -12,6 +12,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Literal, Optional, Tuple
@@ -42,6 +43,8 @@ class FlagRow:
     ]
     flag: str | None
     error: str | None
+    time_processing: int | None
+    checkout_time: int | None
 
 
 class CheckoutError(Exception):
@@ -81,8 +84,10 @@ def insert_flags(
             "patch_id",
             "status",
             "flag",
-            "error"
-        ) VALUES (?, ?, ?, ?, ?, ?)
+            "error",
+            "time_processing_ms",
+            "checkout_time_ms"
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """
     db.executemany(
         query,
@@ -94,6 +99,8 @@ def insert_flags(
                 f.status,
                 f.flag,
                 f.error,
+                f.time_processing,
+                f.checkout_time,
             )
             for f in flags
         ],
@@ -188,7 +195,7 @@ def process_patch(
     patches_folder: str,
     patchlens_executable: str,
     expand_building_flags_with: Optional[str],
-) -> str:
+) -> (str, int, int):
     patch_file = patch_info.patch_file
 
     if patch_info.patch_file is not None:
@@ -209,6 +216,7 @@ def process_patch(
     except UnicodeDecodeError:
         raise CheckoutError(f"Failed to decode UTF-8 in patch file {patch_file}")
 
+    checkout_start = time.perf_counter()
     try:
         # Checkout the commit in the repository
         subprocess.run(
@@ -227,6 +235,8 @@ def process_patch(
         )
     except subprocess.CalledProcessError as error:
         raise CheckoutError(f"Failed to checkout revision {rev}: {error}")
+    checkout_end = time.perf_counter()
+    checkout_time_ms = checkout_end - checkout_start
 
     try:
         # Run your custom command on the checked-out commit
@@ -242,6 +252,7 @@ def process_patch(
             if expand_building_flags_with
             else [patchlens_executable, "analyze-git", repo_path, patch_file]
         )
+        patchlens_time_start = time.perf_counter()
         proc = subprocess.run(
             command,  # Command to run (as a string)
             cwd=repo_path,
@@ -250,11 +261,13 @@ def process_patch(
             stderr=subprocess.PIPE,
         )
         try:
+            patchlens_time_end = time.perf_counter()
+            patchlens_time_ms = patchlens_time_end - patchlens_time_start
             decoded = proc.stdout.decode("utf-8")
             simplifier = ExpressionSimplifier()
             simp = simplifier.simplify(decoded)
             print(f"{decoded} -> {simp}")
-            return simp
+            return (simp, patchlens_time_ms, checkout_time_ms)
         except UnicodeError as error:
             raise PatchlensError(
                 f"Invalid unicode output from patchlens on {rev}: {error}"
@@ -384,7 +397,7 @@ def main():
             print(
                 f"Processing {patch.patch_file if patch.patch_file else patch.github_patch_url} for {patch.cve_id}"
             )
-            result = process_patch(
+            (result_flag, patchlens_time_ms, checkout_time_ms) = process_patch(
                 repository_path,
                 patch,
                 patches_folder,
@@ -393,18 +406,23 @@ def main():
             )
 
             # Ensure the result does not contain any newline to avoid corrupting the CSV structure
-            result = result.replace("\n", "").replace("\r", "")
+            result_flag = result_flag.replace("\n", "").replace("\r", "")
             insert_flags(
                 db,
                 [
                     FlagRow(
-                        patch_id=patch.patch_id, status="ok", flag=result, error=None
+                        patch_id=patch.patch_id,
+                        status="ok",
+                        flag=result_flag,
+                        error=None,
+                        time_processing=patchlens_time_ms,
+                        checkout_time=checkout_time_ms,
                     )
                 ],
                 run_started_at,
                 patchlens_version,
             )
-            print(f"\r[FLAGS] {patch.cve_id}/{patch.patch_id} = {result}")
+            print(f"\r[FLAGS] {patch.cve_id}/{patch.patch_id} = {result_flag}")
         except CheckoutError as error:
             print(
                 f"\r[ERROR] Checkout error for {patch.cve_id}/{patch.patch_id}: {error}"
@@ -417,6 +435,8 @@ def main():
                         status="CheckoutError",
                         flag=None,
                         error=error.__str__(),
+                        time_processing=None,
+                        checkout_time=None,
                     )
                 ],
                 run_started_at,
@@ -434,6 +454,8 @@ def main():
                         status="PatchlensError",
                         flag=None,
                         error=error.__str__(),
+                        time_processing=None,
+                        checkout_time=None,
                     )
                 ],
                 run_started_at,
@@ -451,6 +473,8 @@ def main():
                         status="DoesNotModifyCSource",
                         flag=None,
                         error=error.__str__(),
+                        time_processing=None,
+                        checkout_time=None,
                     )
                 ],
                 run_started_at,
@@ -468,6 +492,8 @@ def main():
                         status="ModifiesHeaderFiles",
                         flag=None,
                         error=error.__str__(),
+                        time_processing=None,
+                        checkout_time=None,
                     )
                 ],
                 run_started_at,
