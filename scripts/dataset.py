@@ -93,8 +93,10 @@ def import_run(src_db: sqlite3.Connection, dst_db: sqlite3.Connection, run_id: s
             "patch_id",
             "status",
             "flag",
-            "error"
-        ) VALUES (?, ?, ?, ?, ?, ?)
+            "error",
+            "time_processing_ms",
+            "checkout_time_ms"
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """
     dst_db.executemany(
         insert_query,
@@ -106,6 +108,8 @@ def import_run(src_db: sqlite3.Connection, dst_db: sqlite3.Connection, run_id: s
                 f[3],
                 f[4],
                 f[5],
+                f[6],
+                f[7],
             )
             for f in data
         ],
