@@ -11,6 +11,7 @@ import os
 import random
 import re
 import sqlite3
+from collections import Counter
 
 FLAG_BUILDING_PATTERN = re.compile(r"building\((/[^)]+)\)")
 FLAG_COMPARISON_PATTERN = re.compile(
@@ -159,17 +160,22 @@ def show_runs(db: sqlite3.Connection):
         print(f"- [{value[1]}] {value[0]} ({value[2]} flags)")
 
 
-def var_count_from_flag(flag: str) -> int:
-    def ast_to_var_count(node: ast.AST) -> int:
+def var_count_from_flag(flag: str) -> (int, Counter):
+    def ast_to_var_count(node: ast.AST, counter: Counter) -> int:
         # Check for binary operations
         if isinstance(node, ast.BinOp):
-            return ast_to_var_count(node.left) + ast_to_var_count(node.right)
+            return ast_to_var_count(node.left, counter) + ast_to_var_count(
+                node.right, counter
+            )
         # Check for `defined` function calls
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
             and node.func.id == "defined"
+            and len(node.args) == 1
+            and isinstance(node.args[0], ast.Name)
         ):
+            counter[f'defined("{node.args[0].id}")'] += 1
             return 1
         # Bail out when procesing `building` flags
         if (
@@ -180,13 +186,19 @@ def var_count_from_flag(flag: str) -> int:
             raise ValueError("flag contain building functions")
         # Check for negations
         if isinstance(node, ast.UnaryOp):
-            return ast_to_var_count(node.operand)
+            return ast_to_var_count(node.operand, counter)
         # Check for True constants
         if isinstance(node, ast.Constant) and node.value:
             return 0
         if isinstance(node, ast.Compare):
-            return 1
-        print(f"{ast.dump(node)}")
+            if (
+                isinstance(node.left, ast.Constant)
+                and len(node.comparators) == 1
+                and isinstance(node.comparators[0], ast.Constant)
+            ):
+                counter[f"({node.left.value} == {node.comparators[0].value})"] += 1
+                return 1
+        print(f"Failed to understand flag: {ast.dump(node)}")
         exit(1)
 
     # Quick fixes to make the flag compatible with the ast module
@@ -199,7 +211,9 @@ def var_count_from_flag(flag: str) -> int:
     )
 
     ast_expr = ast.parse(flag, mode="eval").body
-    return ast_to_var_count(ast_expr)
+    counter = Counter()
+    var_count = ast_to_var_count(ast_expr, counter)
+    return (var_count, counter)
 
 
 def flag_complexity(db: sqlite3.Connection):
@@ -243,10 +257,13 @@ def flag_complexity(db: sqlite3.Connection):
         )
         var_count = []
         not_expanded = False
+        global_counter = Counter()
         for row in cursor.fetchall():
             flag = row[0]
             try:
-                var_count.append(var_count_from_flag(flag))
+                (count_in_flag, var_counter) = var_count_from_flag(flag)
+                var_count.append(count_in_flag)
+                global_counter = global_counter + var_counter
             except ValueError:
                 not_expanded = True
                 break
@@ -255,6 +272,7 @@ def flag_complexity(db: sqlite3.Connection):
         else:
             avg = sum(var_count) / len(var_count)
             print(f"- [{product}] {run} ({flag_count} flags) -> avg {avg} vars")
+            print("Variables that most appear:", global_counter.most_common(10))
 
 
 def main() -> int:
