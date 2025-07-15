@@ -4,7 +4,6 @@ use patchlens::logical_utils::Flag;
 use patchlens::{
     analyze_variants_affected, build_expanders, mail_utils, patch_utils, preprocessor,
 };
-use std::char::ToLowercase;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
