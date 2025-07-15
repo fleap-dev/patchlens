@@ -125,7 +125,7 @@ pub fn find_required_configs_with_reader<R: KBuildReader>(
         } else if current == arch_root {
             // strip trailing '/'
             let arch_name = make_target.trim_end_matches('/');
-            conditions.push(Flag::Equal("ARCH".into(), arch_name.into()));
+            conditions.push(Flag::Equal("$(ARCH)".into(), arch_name.into()));
             continue;
         }
 
