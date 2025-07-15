@@ -75,7 +75,7 @@ class ExpressionSimplifier:
             and len(node.ops) == 1
             and isinstance(node.ops[0], ast.Eq)
         ):
-            return z3.Bool(f"{node.left.value} = {node.comparators[0].value}")
+            return z3.Bool(f'"{node.left.value}" == "{node.comparators[0].value}"')
         else:
             raise ValueError(f"Unsupported AST node: {ast.dump(node)}")
 
