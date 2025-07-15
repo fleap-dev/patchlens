@@ -6,9 +6,27 @@
 # ///
 
 import argparse
+import ast
 import os
 import random
+import re
 import sqlite3
+
+FLAG_BUILDING_PATTERN = re.compile(r"building\((/[^)]+)\)")
+FLAG_COMPARISON_PATTERN = re.compile(
+    r"\(\s*"
+    r"(\$\([^()]+\)|[A-Za-z_]\w*)"  # group1 = "$(…)" or identifier
+    r"\s*=\s*"
+    r"([^()]+?)"  # group2 = RHS (not containing parentheses)
+    r"\s*\)"
+)
+FLAG_SINGLE_COMPARISON = re.compile(
+    r"(?<!\()"  # no "(" directly before
+    r"(\$\([^()]+\)|[A-Za-z_]\w*)"  # group1 = "$(…)" or identifier
+    r"\s*=\s*"
+    r"([^\s()]+)"  # group2 = VAL (no spaces or parens)
+    r"(?!\))"  # no ")" directly after
+)
 
 
 def random_error(db: sqlite3.Connection, run_id: str):
@@ -141,6 +159,104 @@ def show_runs(db: sqlite3.Connection):
         print(f"- [{value[1]}] {value[0]} ({value[2]} flags)")
 
 
+def var_count_from_flag(flag: str) -> int:
+    def ast_to_var_count(node: ast.AST) -> int:
+        # Check for binary operations
+        if isinstance(node, ast.BinOp):
+            return ast_to_var_count(node.left) + ast_to_var_count(node.right)
+        # Check for `defined` function calls
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "defined"
+        ):
+            return 1
+        # Bail out when procesing `building` flags
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "building"
+        ):
+            raise ValueError("flag contain building functions")
+        # Check for negations
+        if isinstance(node, ast.UnaryOp):
+            return ast_to_var_count(node.operand)
+        # Check for True constants
+        if isinstance(node, ast.Constant) and node.value:
+            return 0
+        if isinstance(node, ast.Compare):
+            return 1
+        print(f"{ast.dump(node)}")
+        exit(1)
+
+    # Quick fixes to make the flag compatible with the ast module
+    flag = FLAG_BUILDING_PATTERN.sub(lambda m: f'building("{m.group(1)}")', flag)
+    flag = FLAG_COMPARISON_PATTERN.sub(
+        lambda m: f'("{m.group(1)}" == "{m.group(2)}")', flag
+    )
+    flag = FLAG_SINGLE_COMPARISON.sub(
+        lambda m: f'"{m.group(1)}" == "{m.group(2)}"', flag
+    )
+
+    ast_expr = ast.parse(flag, mode="eval").body
+    return ast_to_var_count(ast_expr)
+
+
+def flag_complexity(db: sqlite3.Connection):
+    query = """
+        SELECT
+            f.run_started_at,
+            c.calculated_product,
+            COUNT(*)            AS flags_count
+        FROM flags    AS f
+        JOIN patches  AS p  ON f.patch_id      = p.id
+        JOIN cves     AS c  ON p.cve_id        = c.cve_id
+        GROUP BY
+            f.run_started_at,
+            c.calculated_product
+        ORDER BY
+            f.run_started_at;
+    """
+
+    cursor = db.cursor()
+    cursor.execute(query)
+
+    for value in cursor.fetchall():
+        product = value[1]
+        run = value[0]
+        flag_count = value[2]
+
+        # We only care about linux/linux
+        if "fedora" in product or "debian" in product:
+            continue
+
+        cursor.execute(
+            """
+            SELECT
+                flags.flag
+            FROM flags
+            WHERE
+                flags.status = 'ok'
+                AND flags.run_started_at = ?;
+        """,
+            [run],
+        )
+        var_count = []
+        not_expanded = False
+        for row in cursor.fetchall():
+            flag = row[0]
+            try:
+                var_count.append(var_count_from_flag(flag))
+            except ValueError:
+                not_expanded = True
+                break
+        if not_expanded:
+            print(f"- [{product}] {run} ({flag_count} flags) -> NOT EXPANDED")
+        else:
+            avg = sum(var_count) / len(var_count)
+            print(f"- [{product}] {run} ({flag_count} flags) -> avg {avg} vars")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="./cli")
     parser.add_argument(
@@ -151,7 +267,7 @@ def main() -> int:
     )
     parser.add_argument(
         "command",
-        choices=["import", "runs", "run", "random_error"],
+        choices=["import", "runs", "run", "random_error", "complexity"],
         help="Command to run",
     )
 
@@ -179,6 +295,8 @@ def main() -> int:
                 import_run(src_db, db, run_id)
         elif cmd == "runs":
             show_runs(db)
+        elif cmd == "complexity":
+            flag_complexity(db)
         elif cmd == "run":
             p = argparse.ArgumentParser()
             p.add_argument("run_id", help="ID of the run (run_started_at)")
