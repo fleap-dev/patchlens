@@ -7,11 +7,13 @@
 
 import argparse
 import ast
+import difflib
 import os
 import random
 import re
 import sqlite3
 from collections import Counter
+from typing import Tuple
 
 FLAG_BUILDING_PATTERN = re.compile(r"building\((/[^)]+)\)")
 FLAG_COMPARISON_PATTERN = re.compile(
@@ -160,7 +162,67 @@ def show_runs(db: sqlite3.Connection):
         print(f"- [{value[1]}] {value[0]} ({value[2]} flags)")
 
 
-def var_count_from_flag(flag: str) -> (int, Counter):
+def fuzzy_match(var: str, text_tokens: list[str], cutoff: float = 0.8) -> bool:
+    """
+    Return True if var fuzzily matches any token in text_tokens
+    with a similarity >= cutoff.
+    """
+    var_norm = var.lower()
+    for tok in text_tokens:
+        score = difflib.SequenceMatcher(None, var_norm, tok.lower()).ratio()
+        if score >= cutoff:
+            return True
+    return False
+
+
+def check_descriptions(db: sqlite3.Connection, cutoff: float = 0.8):
+    query = """
+    SELECT c.cve_id, c.description, f.flag
+      FROM flags AS f
+      JOIN patches AS p ON f.patch_id = p.id
+      JOIN cves AS c    ON p.cve_id   = c.cve_id
+      WHERE f.status = 'ok';
+    """
+    cur = db.cursor()
+    cur.execute(query)
+
+    total, covered, sum_recall = 0, 0, 0.0
+    missing_dist = Counter()
+
+    for cve_id, desc, flag in cur.fetchall():
+        try:
+            _, var_counter = var_count_from_flag(flag)
+        except ValueError:
+            continue
+        vars_ = list(var_counter.keys())
+        if not vars_:
+            continue
+
+        total += 1
+        # tokenize on non-alphanumerics to catch variants like $(ARCH)==x86 or PHP-GD
+        tokens = re.findall(r"[A-Za-z0-9_\-]+", desc)
+
+        matched = {v for v in vars_ if fuzzy_match(v, tokens, cutoff)}
+        recall = len(matched) / len(vars_)
+        sum_recall += recall
+        if matched:
+            covered += 1
+
+        missing_dist[len(vars_) - len(matched)] += 1
+
+    if total == 0:
+        print("No CVEs analyzed.")
+        return
+
+    print(f"Total CVEs: {total}")
+    print(f"Coverage rate (≥1 fuzzy match): {covered / total:.2%}")
+    print(f"Average recall: {sum_recall / total:.2%}")
+    print("Missing‐option distribution:")
+    for miss, freq in sorted(missing_dist.items()):
+        print(f"  {miss} missing: {freq} CVEs")
+
+
+def var_count_from_flag(flag: str) -> Tuple[int, Counter]:
     def ast_to_var_count(node: ast.AST, counter: Counter) -> int:
         # Check for binary operations
         if isinstance(node, ast.BinOp):
@@ -175,7 +237,7 @@ def var_count_from_flag(flag: str) -> (int, Counter):
             and len(node.args) == 1
             and isinstance(node.args[0], ast.Name)
         ):
-            counter[f'defined("{node.args[0].id}")'] += 1
+            counter[f"{node.args[0].id}"] += 1
             return 1
         # Bail out when procesing `building` flags
         if (
@@ -196,7 +258,7 @@ def var_count_from_flag(flag: str) -> (int, Counter):
                 and len(node.comparators) == 1
                 and isinstance(node.comparators[0], ast.Constant)
             ):
-                counter[f"({node.left.value} == {node.comparators[0].value})"] += 1
+                counter[f"{node.left.value} = {node.comparators[0].value}"] += 1
                 return 1
         print(f"Failed to understand flag: {ast.dump(node)}")
         exit(1)
@@ -285,7 +347,14 @@ def main() -> int:
     )
     parser.add_argument(
         "command",
-        choices=["import", "runs", "run", "random_error", "complexity"],
+        choices=[
+            "import",
+            "runs",
+            "run",
+            "random_error",
+            "complexity",
+            "check-descriptions",
+        ],
         help="Command to run",
     )
 
@@ -315,6 +384,8 @@ def main() -> int:
             show_runs(db)
         elif cmd == "complexity":
             flag_complexity(db)
+        elif cmd == "check-descriptions":
+            check_descriptions(db)
         elif cmd == "run":
             p = argparse.ArgumentParser()
             p.add_argument("run_id", help="ID of the run (run_started_at)")
