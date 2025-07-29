@@ -2,6 +2,8 @@
 # /// script
 # requires-python = ">=3.13"
 # dependencies = [
+#   "pandas",
+#   "scipy"
 # ]
 # ///
 
@@ -15,7 +17,10 @@ import re
 import sqlite3
 import sys
 from collections import Counter
-from typing import Tuple
+from dataclasses import dataclass
+from typing import Literal, Tuple
+
+import pandas as pd
 
 FLAG_BUILDING_PATTERN = re.compile(r"building\((/[^)]+)\)")
 FLAG_COMPARISON_PATTERN = re.compile(
@@ -32,6 +37,100 @@ FLAG_SINGLE_COMPARISON = re.compile(
     r"([^\s()]+)"  # group2 = VAL (no spaces or parens)
     r"(?!\))"  # no ")" directly after
 )
+
+
+@dataclass
+class PatchlensRun:
+    run_id: str
+    product: str
+    flag_count: int
+
+
+@dataclass
+class RunFlag:
+    cve_id: str
+    cvss_impact: float
+    run_id: str
+    patchlens_version: str
+    patch_id: str
+    status: Literal[
+        "ok",
+        "CheckoutError",
+        "PatchlensError",
+        "DoesNotModifyCSource",
+        "ModifiesHeaderFiles",
+    ]
+    flag: str | None
+    error: str | None
+
+
+def _get_runs(db: sqlite3.Connection):
+    query = """
+        SELECT
+            f.run_started_at,
+            c.calculated_product,
+            COUNT(*)            AS flags_count
+        FROM flags    AS f
+        JOIN patches  AS p  ON f.patch_id      = p.id
+        JOIN cves     AS c  ON p.cve_id        = c.cve_id
+        GROUP BY
+            f.run_started_at,
+            c.calculated_product
+        ORDER BY
+            f.run_started_at;
+    """
+
+    cursor = db.cursor()
+    cursor.execute(query)
+
+    return list(
+        filter(
+            lambda run: not ("fedora" in run.product or "debian" in run.product),
+            map(
+                lambda row: PatchlensRun(
+                    run_id=row[0], product=row[1], flag_count=row[2]
+                ),
+                cursor.fetchall(),
+            ),
+        )
+    )
+
+
+def _flags_from_run(db: sqlite3.Connection, run: str):
+    cursor = db.cursor()
+    cursor.execute(
+        """
+        SELECT
+            cves.cve_id,
+            cves.cve_impact_score,
+            flags.patchlens_version,
+            flags.patch_id,
+            flags.status,
+            flags.flag,
+            flags.error
+        FROM flags
+        JOIN patches ON patches.id = flags.patch_id
+        JOIN cves ON cves.cve_id = patches.cve_id
+        WHERE
+            flags.run_started_at = ?;
+    """,
+        [run],
+    )
+    return list(
+        map(
+            lambda row: RunFlag(
+                cve_id=row[0],
+                cvss_impact=row[1],
+                run_id=run,
+                patchlens_version=row[2],
+                patch_id=row[3],
+                status=row[4],
+                flag=row[5],
+                error=row[6],
+            ),
+            cursor.fetchall(),
+        )
+    )
 
 
 def random_error(db: sqlite3.Connection, run_id: str):
@@ -368,6 +467,54 @@ def flag_complexity(db: sqlite3.Connection):
             print("Variables that most appear:", global_counter.most_common(10))
 
 
+def variable_to_severity_correlation(db: sqlite3.Connection, min_patches=5):
+    """
+    For each run (system) in the database, compute:
+        - The variable with the highest average CVSS score (among those appearing in at least min_patches).
+        - The top 3 variables by average impact score.
+    Then print a summary per run.
+    """
+    runs = _get_runs(db)  # Retrieve run objects with .run_id attributes
+
+    for run in runs:
+        # Collect (variable, severity) records
+        records = []
+        flags = _flags_from_run(db, run.run_id)
+        for flag in flags:
+            if flag.status != "ok":
+                continue
+            try:
+                _, var_counter = var_count_from_flag(str(flag.flag))
+            except ValueError:
+                break
+            severity = flag.cvss_impact
+            for var in var_counter:
+                records.append({"variable": var, "severity": severity})
+
+        if not records:
+            print(f"No data for run {run.run_id}\n")
+            continue
+
+        df = pd.DataFrame(records)
+        stats = df.groupby("variable")["severity"].agg(["mean", "count"])
+        stats = stats[stats["count"] >= min_patches]
+        stats = stats.sort_values("mean", ascending=False)
+
+        # Prepare summary
+        top_vars = stats.head(3)
+        best_var, best_row = top_vars.index[0], top_vars.iloc[0]
+        print(f"Run {run.run_id} ({run.product}):")
+        print(
+            f"On average, patches that contain {best_var} have an average impact score of {best_row['mean']:.2f}."
+        )
+        print("The variables associated with the highest average impact scores are:")
+        for var, row in top_vars.iterrows():
+            print(
+                f"  - {var}: avg score {row['mean']:.2f} (in {int(row['count'])} patches)"
+            )
+        print()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="./cli")
     parser.add_argument(
@@ -386,6 +533,7 @@ def main() -> int:
             "complexity",
             "check-descriptions",
             "var-counts",
+            "variable-severity",
         ],
         help="Command to run",
     )
@@ -434,6 +582,8 @@ def main() -> int:
             p.add_argument("label", help="Label for the rows in the output csv")
             ns = p.parse_args(remaining_args)
             run_var_counts(db, ns.run_id, ns.label)
+        elif cmd == "variable-severity":
+            variable_to_severity_correlation(db)
         else:
             print(f"Unknown command {cmd}!")
             return 1
