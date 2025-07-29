@@ -7,11 +7,13 @@
 
 import argparse
 import ast
+import csv
 import difflib
 import os
 import random
 import re
 import sqlite3
+import sys
 from collections import Counter
 from typing import Tuple
 
@@ -278,6 +280,35 @@ def var_count_from_flag(flag: str) -> Tuple[int, Counter]:
     return (var_count, counter)
 
 
+def run_var_counts(db: sqlite3.Connection, run: str, label: str):
+    cursor = db.cursor()
+
+    cursor.execute(
+        """
+        SELECT
+            flags.flag
+        FROM flags
+        WHERE
+            flags.status = 'ok'
+            AND flags.run_started_at = ?;
+    """,
+        [run],
+    )
+
+    var_count = []
+
+    for row in cursor.fetchall():
+        try:
+            flag = row[0]
+            (count_in_flag, var_counter) = var_count_from_flag(flag)
+            var_count.append([label, count_in_flag])
+        except ValueError:
+            continue
+
+    out = csv.writer(sys.stdout)
+    out.writerows(var_count)
+
+
 def flag_complexity(db: sqlite3.Connection):
     query = """
         SELECT
@@ -354,6 +385,7 @@ def main() -> int:
             "random_error",
             "complexity",
             "check-descriptions",
+            "var-counts",
         ],
         help="Command to run",
     )
@@ -396,6 +428,12 @@ def main() -> int:
             p.add_argument("run_id", help="ID of the run (run_started_at)")
             ns = p.parse_args(remaining_args)
             random_error(db, ns.run_id)
+        elif cmd == "var-counts":
+            p = argparse.ArgumentParser()
+            p.add_argument("run_id", help="ID of the run (run_started_at)")
+            p.add_argument("label", help="Label for the rows in the output csv")
+            ns = p.parse_args(remaining_args)
+            run_var_counts(db, ns.run_id, ns.label)
         else:
             print(f"Unknown command {cmd}!")
             return 1
