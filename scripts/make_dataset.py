@@ -65,6 +65,7 @@ def setup_tables(db: sqlite3.Connection):
             "description" TEXT,
             "configurations" TEXT,
             "severity" TEXT,
+            "cvss_base_score" REAL,
             "cve_exploitability_score" REAL,
             "cve_impact_score" REAL,
             "patch_ref_count" INT NOT NULL DEFAULT 0
@@ -187,10 +188,11 @@ def upsert_cves(db: sqlite3.Connection, cves: list[dict[str, Any]]):
             description,
             configurations,
             severity,
+            cvss_base_score,
             cve_exploitability_score,
             cve_impact_score,
             patch_ref_count
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(cve_id) DO UPDATE SET
             calculated_product = excluded.calculated_product,
             year = excluded.year,
@@ -200,6 +202,7 @@ def upsert_cves(db: sqlite3.Connection, cves: list[dict[str, Any]]):
             description = excluded.description,
             configurations = excluded.configurations,
             severity = excluded.severity,
+            cvss_base_score = excluded.cvss_base_score,
             cve_exploitability_score = excluded.cve_exploitability_score,
             cve_impact_score = excluded.cve_impact_score,
             patch_ref_count = excluded.patch_ref_count;
@@ -215,6 +218,7 @@ def upsert_cves(db: sqlite3.Connection, cves: list[dict[str, Any]]):
             cve["description"],
             cve["configurations"],
             cve["severity"],
+            cve["cvss_base_score"],
             cve["cve_exploitability_score"],
             cve["cve_impact_score"],
             cve["patch_ref_count"],
@@ -308,6 +312,15 @@ def collect_cve_data(cve_data_folder, year) -> tuple[list[dict[str, Any]], list[
             ]
             if row["cve"]["metrics"].get("cvssMetricV31")
             else None,
+            "cvss_base_score": row["cve"]["metrics"]["cvssMetricV31"][0]["cvssData"][
+                "baseScore"
+            ]
+            if row["cve"]["metrics"].get("cvssMetricV31")
+            else (
+                row["cve"]["metrics"]["cvssMetricV2"][0]["cvssData"]["baseScore"]
+                if row["cve"]["metrics"].get("cvssMetricV2")
+                else None
+            ),
             "cve_exploitability_score": safe_str_to_float(
                 row["cve"]["metrics"]["cvssMetricV31"][0]["exploitabilityScore"]
                 if row["cve"]["metrics"].get("cvssMetricV31")
