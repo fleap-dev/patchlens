@@ -50,6 +50,7 @@ class PatchlensRun:
 class RunFlag:
     cve_id: str
     cvss_impact: float
+    cvss_base_score: float | None
     run_id: str
     patchlens_version: str
     patch_id: str
@@ -107,7 +108,8 @@ def _flags_from_run(db: sqlite3.Connection, run: str):
             flags.patch_id,
             flags.status,
             flags.flag,
-            flags.error
+            flags.error,
+            cves.cvss_base_score
         FROM flags
         JOIN patches ON patches.id = flags.patch_id
         JOIN cves ON cves.cve_id = patches.cve_id
@@ -127,6 +129,7 @@ def _flags_from_run(db: sqlite3.Connection, run: str):
                 status=row[4],
                 flag=row[5],
                 error=row[6],
+                cvss_base_score=row[7],
             ),
             cursor.fetchall(),
         )
@@ -467,17 +470,30 @@ def flag_complexity(db: sqlite3.Connection):
             print("Variables that most appear:", global_counter.most_common(10))
 
 
-def variable_to_severity_correlation(db: sqlite3.Connection, min_patches=5):
+def variable_to_severity_correlation(db: sqlite3.Connection, min_patches=6):
     """
-    For each run (system) in the database, compute:
-        - The variable with the highest average CVSS score (among those appearing in at least min_patches).
-        - The top 3 variables by average impact score.
-    Then print a summary per run.
+    For each run (system) in the database, bucket CVSS base scores into
+    Low, Medium, High, Critical, then for each configuration variable compute:
+        - How many patches fall into each bucket.
+        - The proportion of patches in the 'High' or 'Critical' buckets.
+    Finally, print a summary per run listing:
+        - The variable most often associated with 'High or Critical' patches.
+        - The top 3 variables by proportion of 'High or Critical' patches.
     """
-    runs = _get_runs(db)  # Retrieve run objects with .run_id attributes
+
+    def bucket(score):
+        if score <= 3.9:
+            return "Low"
+        elif score <= 6.9:
+            return "Medium"
+        elif score <= 8.9:
+            return "High"
+        else:
+            return "Critical"
+
+    runs = _get_runs(db)  # Retrieve objects with .run_id and .product attributes
 
     for run in runs:
-        # Collect (variable, severity) records
         records = []
         flags = _flags_from_run(db, run.run_id)
         for flag in flags:
@@ -486,32 +502,44 @@ def variable_to_severity_correlation(db: sqlite3.Connection, min_patches=5):
             try:
                 _, var_counter = var_count_from_flag(str(flag.flag))
             except ValueError:
-                break
-            severity = flag.cvss_impact
+                continue
+            severity = flag.cvss_base_score
+            sev_bucket = bucket(severity)
             for var in var_counter:
-                records.append({"variable": var, "severity": severity})
+                records.append({"variable": var, "bucket": sev_bucket})
 
         if not records:
             print(f"No data for run {run.run_id}\n")
             continue
 
         df = pd.DataFrame(records)
-        stats = df.groupby("variable")["severity"].agg(["mean", "count"])
-        stats = stats[stats["count"] >= min_patches]
-        stats = stats.sort_values("mean", ascending=False)
+        # Count how many patches per variable per bucket
+        stats = df.groupby("variable")["bucket"].value_counts().unstack(fill_value=0)
+        # Filter variables with at least min_patches total
+        stats = stats[stats.sum(axis=1) >= min_patches].copy()
+        # Compute proportion of High+Critical patches
+        high_count = stats.get("High", 0)
+        crit_count = stats.get("Critical", 0)
+        stats["highcrit_prop"] = (high_count + crit_count) / stats.sum(axis=1)
+        # Sort by that proportion descending
+        stats = stats.sort_values("highcrit_prop", ascending=False)
 
         # Prepare summary
         top_vars = stats.head(3)
-        best_var, best_row = top_vars.index[0], top_vars.iloc[0]
+        best_var = top_vars.index[0]
+        best_prop = top_vars.loc[best_var, "highcrit_prop"]
+
         print(f"Run {run.run_id} ({run.product}):")
         print(
-            f"On average, patches that contain {best_var} have an average impact score of {best_row['mean']:.2f}."
+            f"Variable most associated with High or Critical severity: {best_var} "
+            f"(High/Critical in {best_prop:.1%} of its patches)."
         )
-        print("The variables associated with the highest average impact scores are:")
+        print("Top 3 variables by High/Critical-patch proportion:")
         for var, row in top_vars.iterrows():
-            print(
-                f"  - {var}: avg score {row['mean']:.2f} (in {int(row['count'])} patches)"
-            )
+            total = int(row.sum())
+            hc_count = int(row.get("High", 0) + row.get("Critical", 0))
+            prop = row["highcrit_prop"]
+            print(f"  - {var}: {hc_count}/{total} patches ({prop:.1%} high/critical)")
         print()
 
 
