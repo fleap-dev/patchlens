@@ -18,7 +18,7 @@ import sqlite3
 import sys
 from collections import Counter
 from dataclasses import dataclass
-from typing import Literal, Tuple
+from typing import Dict, List, Literal, Tuple
 
 import pandas as pd
 
@@ -543,6 +543,25 @@ def variable_to_severity_correlation(db: sqlite3.Connection, min_patches=6):
         print()
 
 
+def analyze_common_operations(db: sqlite3.Connection, runs: List[str]):
+    per_run_counts: Dict[
+        str, Dict[Literal["amp_count", "pipe_count", "flag_count", "not_count"], int]
+    ] = {}
+    for run in runs:
+        flags = _flags_from_run(db, run)
+        flags = list(filter(lambda flag: flag.status == "ok", flags))
+        num_ampersands = sum(((str)(flag.flag)).count("&") for flag in flags)
+        num_pipes = sum(((str)(flag.flag)).count("|") for flag in flags)
+        num_not = sum(((str)(flag.flag)).count("~") for flag in flags)
+        per_run_counts[run] = {
+            "amp_count": num_ampersands,
+            "pipe_count": num_pipes,
+            "not_count": num_not,
+            "flag_count": len(flags),
+        }
+    print(per_run_counts)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="./cli")
     parser.add_argument(
@@ -562,6 +581,7 @@ def main() -> int:
             "check-descriptions",
             "var-counts",
             "variable-severity",
+            "common-operations",
         ],
         help="Command to run",
     )
@@ -612,6 +632,14 @@ def main() -> int:
             run_var_counts(db, ns.run_id, ns.label)
         elif cmd == "variable-severity":
             variable_to_severity_correlation(db)
+        elif cmd == "common-operations":
+            p = argparse.ArgumentParser()
+            p.add_argument(
+                "runs", help="IDs of the runs to analyze (separated by commas)"
+            )
+            ns = p.parse_args(remaining_args)
+            raw_runs: str = ns.runs
+            analyze_common_operations(db, raw_runs.split(","))
         else:
             print(f"Unknown command {cmd}!")
             return 1
