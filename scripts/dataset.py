@@ -326,7 +326,7 @@ def check_descriptions(db: sqlite3.Connection, cutoff: float = 0.8):
         print(f"  {miss} missing: {freq} CVEs")
 
 
-def var_count_from_flag(flag: str) -> Tuple[int, Counter]:
+def var_count_from_flag(flag: str) -> Tuple[int, Counter[str]]:
     def ast_to_var_count(node: ast.AST, counter: Counter) -> int:
         # Check for binary operations
         if isinstance(node, ast.BinOp):
@@ -543,6 +543,41 @@ def variable_to_severity_correlation(db: sqlite3.Connection, min_patches=6):
         print()
 
 
+def most_severe_variables(db: sqlite3.Connection):
+    runs = _get_runs(db)  # Retrieve objects with .run_id and .product attributes
+
+    for run in runs:
+        print(f"Analysis for {run}")
+        records: Dict[str, List[float]] = {}
+        flags = _flags_from_run(db, run.run_id)
+        for flag in flags:
+            if flag.status != "ok":
+                continue
+            try:
+                _, var_counter = var_count_from_flag(str(flag.flag))
+            except ValueError:
+                continue
+            severity = flag.cvss_base_score
+            if severity:
+                for var in var_counter:
+                    if var in records:
+                        records[var].append(severity)
+                    else:
+                        records[var] = [severity]
+
+        averages: Dict[str, float] = {}
+        for config in records:
+            # Filter out config options with less than 5 appearances
+            if len(records[config]) > 5:
+                averages[config] = sum(records[config]) / len(records[config])
+
+        sorted_by_value = dict(
+            sorted(averages.items(), key=lambda kv: kv[1], reverse=True)
+        )
+        for config in sorted_by_value:
+            print(config, "=", sorted_by_value[config])
+
+
 def analyze_common_operations(db: sqlite3.Connection, runs: List[str]):
     per_run_counts: Dict[
         str, Dict[Literal["amp_count", "pipe_count", "flag_count", "not_count"], int]
@@ -582,6 +617,7 @@ def main() -> int:
             "var-counts",
             "variable-severity",
             "common-operations",
+            "most-severe-variables",
         ],
         help="Command to run",
     )
@@ -640,6 +676,8 @@ def main() -> int:
             ns = p.parse_args(remaining_args)
             raw_runs: str = ns.runs
             analyze_common_operations(db, raw_runs.split(","))
+        elif cmd == "most-severe-variables":
+            most_severe_variables(db)
         else:
             print(f"Unknown command {cmd}!")
             return 1
