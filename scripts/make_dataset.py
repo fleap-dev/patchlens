@@ -68,7 +68,8 @@ def setup_tables(db: sqlite3.Connection):
             "cvss_base_score" REAL,
             "cve_exploitability_score" REAL,
             "cve_impact_score" REAL,
-            "patch_ref_count" INT NOT NULL DEFAULT 0
+            "patch_ref_count" INT NOT NULL DEFAULT 0,
+            "published_at" DATE NOT NULL
         )
     """)
     cursor.execute("""
@@ -191,8 +192,9 @@ def upsert_cves(db: sqlite3.Connection, cves: list[dict[str, Any]]):
             cvss_base_score,
             cve_exploitability_score,
             cve_impact_score,
-            patch_ref_count
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            patch_ref_count,
+            published_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(cve_id) DO UPDATE SET
             calculated_product = excluded.calculated_product,
             year = excluded.year,
@@ -205,7 +207,8 @@ def upsert_cves(db: sqlite3.Connection, cves: list[dict[str, Any]]):
             cvss_base_score = excluded.cvss_base_score,
             cve_exploitability_score = excluded.cve_exploitability_score,
             cve_impact_score = excluded.cve_impact_score,
-            patch_ref_count = excluded.patch_ref_count;
+            patch_ref_count = excluded.patch_ref_count,
+            published_at = excluded.published_at;
     """
     values = [
         (
@@ -222,6 +225,7 @@ def upsert_cves(db: sqlite3.Connection, cves: list[dict[str, Any]]):
             cve["cve_exploitability_score"],
             cve["cve_impact_score"],
             cve["patch_ref_count"],
+            cve["published_at"],
         )
         for cve in cves
     ]
@@ -340,6 +344,7 @@ def collect_cve_data(cve_data_folder, year) -> tuple[list[dict[str, Any]], list[
                 ),
             ),
             "patch_ref_count": 0,
+            "published_at": row["cve"]["published"],
         }
         cve_patches = []
         for ref in row["cve"]["references"]:
