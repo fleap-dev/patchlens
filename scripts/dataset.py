@@ -3,6 +3,8 @@
 # requires-python = ">=3.13"
 # dependencies = [
 #   "pandas",
+#   "matplotlib",
+#   "numpy",
 #   "scipy"
 # ]
 # ///
@@ -21,6 +23,8 @@ from dataclasses import dataclass
 from typing import Dict, List, Literal, Tuple
 
 import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 
 FLAG_BUILDING_PATTERN = re.compile(r"building\((/[^)]+)\)")
 FLAG_COMPARISON_PATTERN = re.compile(
@@ -135,6 +139,9 @@ def _flags_from_run(db: sqlite3.Connection, run: str):
         )
     )
 
+def _display_dataframe_to_user(name: str, dataframe: pd.DataFrame) -> None:
+        print(f"\n=== {name} ===")
+        print(dataframe.to_string(index=False))
 
 def random_error(db: sqlite3.Connection, run_id: str):
     query = """
@@ -324,6 +331,118 @@ def check_descriptions(db: sqlite3.Connection, cutoff: float = 0.8):
     print("Missing‐option distribution:")
     for miss, freq in sorted(missing_dist.items()):
         print(f"  {miss} missing: {freq} CVEs")
+
+def check_descriptions_v2(db: sqlite3.Connection, cutoff: float = 0.8):
+    """
+    For each CVE, compute:
+        proportion = (# flags mentioned in description) / (# flags in impact condition)
+
+    Prints summary stats, shows a binned distribution table, and renders three charts:
+        1) Histogram of proportions
+        2) Bar chart of binned proportions
+        3) Empirical CDF of proportions
+
+    Returns a DataFrame with columns:
+        ['cve_id', 'n_required', 'n_mentioned', 'proportion']
+    """
+    query = """
+    SELECT c.cve_id, c.description, f.flag
+        FROM flags AS f
+        JOIN patches AS p ON f.patch_id = p.id
+        JOIN cves AS c    ON p.cve_id   = c.cve_id
+        WHERE f.status = 'ok';
+    """
+    cur = db.cursor()
+    cur.execute(query)
+
+    records: List[Dict] = []
+
+    for cve_id, desc, flag in cur.fetchall():
+        try:
+            # Provided by your codebase: returns (vars_list, Counter(vars))
+            _, var_counter = var_count_from_flag(flag)  # type: ignore # noqa: F821
+        except Exception:
+            continue
+
+        vars_ = list(var_counter.keys())
+        if not vars_:
+            continue
+
+        # Tokenize on non-alphanumerics to catch variants like $(ARCH)==x86 or PHP-GD
+        tokens = re.findall(r"[A-Za-z0-9_\-]+", desc or "")
+
+        matched = {v for v in vars_ if fuzzy_match(v, tokens, cutoff)}
+        n_required = len(vars_)
+        n_mentioned = len(matched)
+        proportion = n_mentioned / n_required if n_required > 0 else 0.0
+
+        records.append(
+            {
+                "cve_id": cve_id,
+                "n_required": n_required,
+                "n_mentioned": n_mentioned,
+                "proportion": proportion,
+            }
+        )
+
+    df = pd.DataFrame.from_records(records, columns=["cve_id", "n_required", "n_mentioned", "proportion"])
+
+    if df.empty:
+        print("No CVEs analyzed.")
+        return df
+
+    # --- Summary stats ---
+    total = len(df)
+    coverage_rate = (df["proportion"] > 0).mean()
+    avg_prop = df["proportion"].mean()
+    median_prop = df["proportion"].median()
+
+    print(f"Total CVEs: {total}")
+    print(f"Coverage rate (≥1 flag mentioned): {coverage_rate:.2%}")
+    print(f"Average proportion (mentioned/required): {avg_prop:.2%}")
+    print(f"Median proportion: {median_prop:.2%}")
+
+    # --- Histogram of proportions ---
+    plt.figure()
+    plt.hist(df["proportion"].values, bins=21, edgecolor="black")
+    plt.title("Distribution of Mention Proportions per CVE")
+    plt.xlabel("Proportion (flags mentioned / flags required)")
+    plt.ylabel("Number of CVEs")
+    plt.tight_layout()
+    plt.show()
+
+    # --- Binned proportions table and bar chart ---
+    bins = [-0.0001, 0.0, 0.25, 0.5, 0.75, 1.0 - 1e-9, 1.0 + 1e-9]
+    labels = ["0.00 exactly", "(0.00, 0.25]", "(0.25, 0.50]", "(0.50, 0.75]", "(0.75, 1.00)", "1.00 exactly"]
+    binned = pd.cut(df["proportion"], bins=bins, labels=labels, include_lowest=True, right=True)
+    bin_counts = binned.value_counts().reindex(labels, fill_value=0).reset_index()
+    bin_counts.columns = ["Proportion Bin", "Count"]
+    bin_counts["Share"] = (bin_counts["Count"] / total).map(lambda x: f"{x:.2%}")
+
+    _display_dataframe_to_user("Proportion Distribution by Bin", bin_counts)
+
+    plt.figure()
+    plt.bar(bin_counts["Proportion Bin"], bin_counts["Count"])
+    plt.title("Binned Distribution of Mention Proportions")
+    plt.xlabel("Proportion Bin")
+    plt.ylabel("Number of CVEs")
+    plt.xticks(rotation=30, ha="right")
+    plt.tight_layout()
+    plt.show()
+
+    # --- Empirical CDF ---
+    vals = np.sort(df["proportion"].values)
+    y = np.arange(1, len(vals) + 1) / len(vals)
+
+    plt.figure()
+    plt.plot(vals, y, drawstyle="steps-post")
+    plt.title("Empirical CDF of Mention Proportions")
+    plt.xlabel("Proportion (flags mentioned / flags required)")
+    plt.ylabel("Cumulative Share of CVEs")
+    plt.tight_layout()
+    plt.show()
+
+    return df
 
 
 def var_count_from_flag(flag: str) -> Tuple[int, Counter[str]]:
@@ -649,7 +768,7 @@ def main() -> int:
         elif cmd == "complexity":
             flag_complexity(db)
         elif cmd == "check-descriptions":
-            check_descriptions(db)
+            check_descriptions_v2(db)
         elif cmd == "run":
             p = argparse.ArgumentParser()
             p.add_argument("run_id", help="ID of the run (run_started_at)")
