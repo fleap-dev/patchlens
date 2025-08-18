@@ -22,8 +22,11 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Tuple
 
-import pandas as pd
+import matplotlib
 import numpy as np
+import pandas as pd
+
+matplotlib.use("TkAgg")  # or "Qt5Agg"
 import matplotlib.pyplot as plt
 
 FLAG_BUILDING_PATTERN = re.compile(r"building\((/[^)]+)\)")
@@ -139,9 +142,11 @@ def _flags_from_run(db: sqlite3.Connection, run: str):
         )
     )
 
+
 def _display_dataframe_to_user(name: str, dataframe: pd.DataFrame) -> None:
-        print(f"\n=== {name} ===")
-        print(dataframe.to_string(index=False))
+    print(f"\n=== {name} ===")
+    print(dataframe.to_string(index=False))
+
 
 def random_error(db: sqlite3.Connection, run_id: str):
     query = """
@@ -332,6 +337,7 @@ def check_descriptions(db: sqlite3.Connection, cutoff: float = 0.8):
     for miss, freq in sorted(missing_dist.items()):
         print(f"  {miss} missing: {freq} CVEs")
 
+
 def check_descriptions_v2(db: sqlite3.Connection, cutoff: float = 0.8):
     """
     For each CVE, compute:
@@ -385,7 +391,9 @@ def check_descriptions_v2(db: sqlite3.Connection, cutoff: float = 0.8):
             }
         )
 
-    df = pd.DataFrame.from_records(records, columns=["cve_id", "n_required", "n_mentioned", "proportion"])
+    df = pd.DataFrame.from_records(
+        records, columns=["cve_id", "n_required", "n_mentioned", "proportion"]
+    )
 
     if df.empty:
         print("No CVEs analyzed.")
@@ -413,8 +421,17 @@ def check_descriptions_v2(db: sqlite3.Connection, cutoff: float = 0.8):
 
     # --- Binned proportions table and bar chart ---
     bins = [-0.0001, 0.0, 0.25, 0.5, 0.75, 1.0 - 1e-9, 1.0 + 1e-9]
-    labels = ["0.00 exactly", "(0.00, 0.25]", "(0.25, 0.50]", "(0.50, 0.75]", "(0.75, 1.00)", "1.00 exactly"]
-    binned = pd.cut(df["proportion"], bins=bins, labels=labels, include_lowest=True, right=True)
+    labels = [
+        "0.00 exactly",
+        "(0.00, 0.25]",
+        "(0.25, 0.50]",
+        "(0.50, 0.75]",
+        "(0.75, 1.00)",
+        "1.00 exactly",
+    ]
+    binned = pd.cut(
+        df["proportion"], bins=bins, labels=labels, include_lowest=True, right=True
+    )
     bin_counts = binned.value_counts().reindex(labels, fill_value=0).reset_index()
     bin_counts.columns = ["Proportion Bin", "Count"]
     bin_counts["Share"] = (bin_counts["Count"] / total).map(lambda x: f"{x:.2%}")
