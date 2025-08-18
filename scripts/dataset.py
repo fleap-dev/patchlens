@@ -687,7 +687,7 @@ def most_severe_variables(db: sqlite3.Connection):
         averages: Dict[str, float] = {}
         for config in records:
             # Filter out config options with less than 5 appearances
-            if len(records[config]) > 5:
+            if len(records[config]) >= 5:
                 averages[config] = sum(records[config]) / len(records[config])
 
         sorted_by_value = dict(
