@@ -5,7 +5,9 @@ use patchlens::{
     analyze_variants_affected, build_expanders, mail_utils, patch_utils, preprocessor,
 };
 use std::ffi::OsStr;
+use std::io::{BufWriter, Read, Write as _};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 #[derive(ClapParser, Debug)]
@@ -16,6 +18,12 @@ struct Cli {
     command: Commands,
     #[arg(short = 'e', value_enum)]
     build_system_expander: Option<BuildSystemExpander>,
+    #[arg(
+        short = 's',
+        long,
+        help = "Path to the binary that will be used to simplify the resulting impact condition"
+    )]
+    simplify_with: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -172,6 +180,11 @@ fn main() -> anyhow::Result<()> {
                 });
             }
 
+            if let Some(simplifier) = args.simplify_with {
+                final_flags = simplify_flags(&final_flags, &simplifier)
+                    .context("failed to simplify flags")?;
+            }
+
             println!("{final_flags}");
         }
         Commands::AnalyzeSingle {
@@ -199,4 +212,34 @@ fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn simplify_flags(final_flags: &Flag, simplifier: &PathBuf) -> anyhow::Result<Flag> {
+    let json_flag = serde_json::to_string(final_flags)?;
+
+    eprintln!("Simplifing {json_flag}");
+
+    let mut child = Command::new(simplifier)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("failed to spawn child \"{}\"", simplifier.display()))?;
+
+    {
+        let stdin = child.stdin.take().unwrap();
+        let mut stdin_writer = BufWriter::new(stdin);
+        stdin_writer.write_all(json_flag.as_bytes())?;
+        stdin_writer.flush()?;
+        // Drop stdin to send EOF
+    }
+
+    let status = child.wait()?;
+
+    if !status.success() {
+        bail!("simplifier failed with status {}", status);
+    }
+
+    let stdout = child.stdout.take().unwrap();
+
+    return Ok(serde_json::from_reader(stdout)?);
 }
