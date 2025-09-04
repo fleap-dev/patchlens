@@ -2,6 +2,4 @@
 
 FLAG=$(cat)
 
-# TODO: implement this
-
-echo "$FLAG"
+cd simpbdd && echo "$FLAG" | ./gradlew run -q 2>/dev/null
