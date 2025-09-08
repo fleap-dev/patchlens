@@ -25,6 +25,7 @@ from typing import Dict, List, Literal, Tuple
 import matplotlib
 import numpy as np
 import pandas as pd
+from scipy import stats
 
 matplotlib.use("TkAgg")  # or "Qt5Agg"
 import matplotlib.pyplot as plt
@@ -733,6 +734,51 @@ def analyze_common_operations(db: sqlite3.Connection, runs: List[str]):
     print(per_run_counts)
 
 
+def analyze_system_wide_cvss(db: sqlite3.Connection, filter_runs: list[str]):
+    runs = _get_runs(db)
+    cvss_syswide = []
+    for run in runs:
+        if run.run_id not in filter_runs:
+            continue
+        print(f"Processing run {run.run_id} of {run.product}")
+        flags = _flags_from_run(db, run.run_id)
+
+        added = 0
+        for flag in flags:
+            if flag.status == "ok":
+                added += 1
+                if flag.flag == "True":
+                    cvss_syswide.append(flag.cvss_impact)
+
+    cursor = db.cursor()
+    result = cursor.execute(
+        "SELECT cves.cve_impact_score FROM cves WHERE cves.cve_impact_score IS NOT NULL"
+    ).fetchall()
+    cvss_other = list(map(lambda x: x[0], result))
+
+    diff_obs = np.mean(cvss_syswide) - np.mean(cvss_other)
+
+    # Mann–Whitney U (nonparametric location shift)
+    u, p_u = stats.mannwhitneyu(cvss_syswide, cvss_other, alternative="two-sided")
+
+    # Bootstrap CI for mean difference
+    rng = np.random.default_rng(0)
+    B = 10000
+    boots = []
+    for _ in range(B):
+        s = rng.choice(cvss_syswide, size=len(cvss_syswide), replace=True)
+        o = rng.choice(cvss_other, size=len(cvss_other), replace=True)
+        boots.append(np.mean(s) - np.mean(o))
+    ci_low, ci_high = np.percentile(boots, [2.5, 97.5])
+
+    print(
+        f"Global Mean: {sum(cvss_other) / len(cvss_other)}. Syswide vulnerabilities mean: {sum(cvss_syswide) / len(cvss_syswide)}"
+    )
+    print(
+        f"Mean diff: {diff_obs:.2f}; 95% bootstrap CI: [{ci_low:.2f}, {ci_high:.2f}]; Mann–Whitney p={p_u:.3g}"
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="./cli")
     parser.add_argument(
@@ -754,6 +800,7 @@ def main() -> int:
             "variable-severity",
             "common-operations",
             "most-severe-variables",
+            "analyze-system-wide-cvss",
         ],
         help="Command to run",
     )
@@ -814,6 +861,14 @@ def main() -> int:
             analyze_common_operations(db, raw_runs.split(","))
         elif cmd == "most-severe-variables":
             most_severe_variables(db)
+        elif cmd == "analyze-system-wide-cvss":
+            p = argparse.ArgumentParser()
+            p.add_argument(
+                "runs", help="IDs of the runs to analyze (separated by commas)"
+            )
+            ns = p.parse_args(remaining_args)
+            raw_runs: str = ns.runs
+            analyze_system_wide_cvss(db, raw_runs.split(","))
         else:
             print(f"Unknown command {cmd}!")
             return 1
