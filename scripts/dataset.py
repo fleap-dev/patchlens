@@ -353,11 +353,12 @@ def check_descriptions_v2(db: sqlite3.Connection, cutoff: float = 0.8):
         ['cve_id', 'n_required', 'n_mentioned', 'proportion']
     """
     query = """
-    SELECT c.cve_id, c.description, f.flag
-        FROM flags AS f
-        JOIN patches AS p ON f.patch_id = p.id
-        JOIN cves AS c    ON p.cve_id   = c.cve_id
-        WHERE f.status = 'ok';
+    SELECT cves.cve_id, cves.description, flags.flag FROM flags
+    JOIN patches ON flags.patch_id = patches.id
+    JOIN cves ON cves.cve_id = patches.cve_id
+    WHERE
+    flags.status = 'ok' AND
+    (flags.run_started_at = '2025-07-15T14:23:20.138739' OR flags.run_started_at = '2025-07-14T15:50:48.744736' OR flags.run_started_at = '2025-07-14T12:47:35.503030');
     """
     cur = db.cursor()
     cur.execute(query)
@@ -372,8 +373,6 @@ def check_descriptions_v2(db: sqlite3.Connection, cutoff: float = 0.8):
             continue
 
         vars_ = list(var_counter.keys())
-        if not vars_:
-            continue
 
         # Tokenize on non-alphanumerics to catch variants like $(ARCH)==x86 or PHP-GD
         tokens = re.findall(r"[A-Za-z0-9_\-]+", desc or "")
