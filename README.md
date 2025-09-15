@@ -13,6 +13,7 @@ This repository contains all code and scripts related to PatchLens.
 *   `makefile_analyzer/`: A small, standalone utility for testing Makefile analysis.
 *   `scripts/`: A collection of Python scripts for automating PatchLens, generating datasets, and performing data analysis for the paper.
 *   `data/`: (git ignored) This directory contains the generated data used for the evaluation in the paper.
+*   `final_dataset.csv`: This is the dataset of CVE flags generated with CVEs of linux, php, and ffmpeg.
 
 ## Building from Source
 
