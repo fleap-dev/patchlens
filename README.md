@@ -12,7 +12,9 @@ This repository contains all code and scripts related to PatchLens.
 *   `cli/`: A command-line frontend for the PatchLens library.
 *   `makefile_analyzer/`: A small, standalone utility for testing Makefile analysis.
 *   `scripts/`: A collection of Python scripts for automating PatchLens, generating datasets, and performing data analysis for the paper.
-*   `data/`: (git ignored) This directory contains the generated data used for the evaluation in the paper.
+*   `data/`: (git ignored) This directory contains the generated data used by scripts for the evaluation in the paper.
+*   `soundness/`: Contains reports from the validation tests described in our paper (Section 3.5).
+*   `tree-sitter-preproc/`: Contains our minimal parser using Tree-Sitter and it's bindings for other languages.
 *   `final_dataset.csv`: This is the dataset of CVE flags generated with CVEs of linux, php, and ffmpeg.
 
 ## Building from Source
@@ -58,16 +60,16 @@ The `scripts/` directory contains various helper scripts used for the research p
 
 *   `make_dataset.py`: Script to generate the patch dataset.
 *   `automate_patchlens.py`: Automates running PatchLens over the entire dataset.
-*   `dataset_stats.py`: Computes statistics on the dataset.
+*   `dataset_stats.py`: Computes statistics on the CVE dataset (before Patchlens automation).
 *   `dataset.py`: Dataset management and more complex analysis:
-    - List, manage and import runs (automated patchlens executions over the dataset);
+    - List, manage and import runs (automated Patchlens executions over the dataset);
     - Analyze the complexity of VICs;
     - Analyze variable mentions in descriptions;
     - Analyze most severe variables and more.
 
 ### Requirements:
-- [https://www.rust-lang.org/learn/get-started](Rust toolchain)
-- [https://github.com/astral-sh/uv](uv)
+- [Rust toolchain](https://www.rust-lang.org/learn/get-started)
+- [uv (our scripts use Python + uv for dep. management)](https://github.com/astral-sh/uv)
 
 ### Automating Patchlens
 To generate the Patch dataset, automate patchlens and analyze the results, do:
@@ -85,6 +87,16 @@ To generate the Patch dataset, automate patchlens and analyze the results, do:
 # NOTE: The `./data/patchlens-repos/linux/` should point to the path to the Git repository of the target system.
 # NOTE: The `-E linux` parameter specifies which type of build-system analysis to be used. In this case, analyze Linux kbuild files.
 ```
+
+## Soundness tests
+The `soundness` subfolder contains reports from the validation tests described in our paper (Section 3.5).
+
+Additionally, the `soundness/illustrative_examples` folder contains examples of Patchlens's overapproximation behavior (referenced in Section 4).
+
+## Support and contact
+
+If you have any questions, suggestions or bug reports, please open an issue or contact us at:
+- _emails addresses will be unredacted after the review process_
 
 ## Citation
 

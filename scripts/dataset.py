@@ -13,6 +13,7 @@ import argparse
 import ast
 import csv
 import difflib
+from ntpath import isfile
 import os
 import random
 import re
@@ -20,7 +21,7 @@ import sqlite3
 import sys
 from collections import Counter
 from dataclasses import dataclass
-from typing import Dict, List, Literal, Tuple
+from typing import Dict, List, Literal, Tuple, cast
 
 import matplotlib
 import numpy as np
@@ -71,6 +72,7 @@ class RunFlag:
     ]
     flag: str | None
     error: str | None
+    product: str
 
 
 def _get_runs(db: sqlite3.Connection):
@@ -117,7 +119,8 @@ def _flags_from_run(db: sqlite3.Connection, run: str):
             flags.status,
             flags.flag,
             flags.error,
-            cves.cvss_base_score
+            cves.cvss_base_score,
+            cves.calculated_product
         FROM flags
         JOIN patches ON patches.id = flags.patch_id
         JOIN cves ON cves.cve_id = patches.cve_id
@@ -138,6 +141,7 @@ def _flags_from_run(db: sqlite3.Connection, run: str):
                 flag=row[5],
                 error=row[6],
                 cvss_base_score=row[7],
+                product=row[8],
             ),
             cursor.fetchall(),
         )
@@ -339,7 +343,7 @@ def check_descriptions(db: sqlite3.Connection, cutoff: float = 0.8):
         print(f"  {miss} missing: {freq} CVEs")
 
 
-def check_descriptions_v2(db: sqlite3.Connection, cutoff: float = 0.8):
+def check_descriptions_v2(db: sqlite3.Connection, runs: List[str], cutoff: float = 0.8):
     """
     For each CVE, compute:
         proportion = (# flags mentioned in description) / (# flags in impact condition)
@@ -352,16 +356,23 @@ def check_descriptions_v2(db: sqlite3.Connection, cutoff: float = 0.8):
     Returns a DataFrame with columns:
         ['cve_id', 'n_required', 'n_mentioned', 'proportion']
     """
-    query = """
+    if not runs:
+        print("No runs provided.")
+        return pd.DataFrame(
+            columns=["cve_id", "n_required", "n_mentioned", "proportion"]
+        )
+
+    placeholders = ",".join(["?"] * len(runs))
+    query = f"""
     SELECT cves.cve_id, cves.description, flags.flag FROM flags
     JOIN patches ON flags.patch_id = patches.id
     JOIN cves ON cves.cve_id = patches.cve_id
     WHERE
     flags.status = 'ok' AND
-    (flags.run_started_at = '2025-07-15T14:23:20.138739' OR flags.run_started_at = '2025-07-14T15:50:48.744736' OR flags.run_started_at = '2025-07-14T12:47:35.503030');
+    flags.run_started_at IN ({placeholders});
     """
     cur = db.cursor()
-    cur.execute(query)
+    cur.execute(query, runs)
 
     records: List[Dict] = []
 
@@ -545,6 +556,50 @@ def run_var_counts(db: sqlite3.Connection, run: str, label: str):
 
     out = csv.writer(sys.stdout)
     out.writerows(var_count)
+
+
+def run_var_count_plot(db: sqlite3.Connection, runs: List[str]):
+    labels: List[str] = []
+    per_run_counts: List[List[int]] = []
+
+    for run in runs:
+        flags = _flags_from_run(db, run)
+        if not flags:
+            print(f"No data for run {run}. Skipping.")
+            continue
+
+        product = flags[0].product
+        var_counts: List[int] = []
+
+        for flag in flags:
+            if flag.status != "ok":
+                continue
+            try:
+                count_in_flag, _ = var_count_from_flag(str(flag.flag))
+            except ValueError:
+                continue
+            var_counts.append(count_in_flag)
+
+        if not var_counts:
+            print(f"No valid expanded flags for run {run}. Skipping.")
+            continue
+
+        labels.append(product)
+        per_run_counts.append(var_counts)
+
+    if not per_run_counts:
+        print("No runs with plottable variable-count data.")
+        return
+
+    plt.figure(figsize=(10, 6))
+    plt.boxplot(per_run_counts, tick_labels=labels, showmeans=True)
+    plt.title("Number of variables per Patch by System", fontsize=18)
+    plt.xlabel("System", fontsize=14)
+    plt.ylabel("Number of variables per Patch", fontsize=14)
+    plt.xticks(fontsize=12)
+    plt.yticks(fontsize=12)
+    plt.tight_layout()
+    plt.show()
 
 
 def flag_complexity(db: sqlite3.Connection):
@@ -736,6 +791,7 @@ def analyze_common_operations(db: sqlite3.Connection, runs: List[str]):
 def analyze_system_wide_cvss(db: sqlite3.Connection, filter_runs: list[str]):
     runs = _get_runs(db)
     cvss_syswide = []
+    syswide_cves = set()
     for run in runs:
         if run.run_id not in filter_runs:
             continue
@@ -748,11 +804,20 @@ def analyze_system_wide_cvss(db: sqlite3.Connection, filter_runs: list[str]):
                 added += 1
                 if flag.flag == "True":
                     cvss_syswide.append(flag.cvss_impact)
+                    syswide_cves.add(flag.cve_id)
 
     cursor = db.cursor()
-    result = cursor.execute(
-        "SELECT cves.cve_impact_score FROM cves WHERE cves.cve_impact_score IS NOT NULL"
-    ).fetchall()
+    if syswide_cves:
+        result = cursor.execute(
+            "SELECT cves.cve_impact_score FROM cves WHERE cves.cve_impact_score IS NOT NULL AND cves.cve_id NOT IN ({})".format(
+                ",".join(["?"] * len(syswide_cves))
+            ),
+            list(syswide_cves),
+        ).fetchall()
+    else:
+        result = cursor.execute(
+            "SELECT cves.cve_impact_score FROM cves WHERE cves.cve_impact_score IS NOT NULL"
+        ).fetchall()
     cvss_other = list(map(lambda x: x[0], result))
 
     diff_obs = np.mean(cvss_syswide) - np.mean(cvss_other)
@@ -778,6 +843,30 @@ def analyze_system_wide_cvss(db: sqlite3.Connection, filter_runs: list[str]):
     )
 
 
+def export_run(db: sqlite3.Connection, run_id: str, output_path: str):
+    appending = False
+
+    if os.path.isfile(output_path):
+        print("Output file already exists. Appending!!!")
+        appending = True
+
+    with open(output_path, mode="a", newline="") as file:
+        writer = csv.writer(file, quoting=csv.QUOTE_ALL)
+
+        if not appending:
+            # Write header
+            # [cve_id, product, patch_id, flag]
+            writer.writerow(["cve_id", "product", "id", "flag"])
+
+        flags = _flags_from_run(db, run_id)
+
+        for flag in flags:
+            if flag.status == "ok":
+                writer.writerow([flag.cve_id, flag.product, flag.patch_id, flag.flag])
+
+        print(f"Exported {len(flags)} flags to {output_path}!")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="./cli")
     parser.add_argument(
@@ -789,13 +878,15 @@ def main() -> int:
     parser.add_argument(
         "command",
         choices=[
-            "import",
             "runs",
             "run",
+            "import",
+            "export",
             "random_error",
             "complexity",
             "check-descriptions",
             "var-counts",
+            "var-count-plot",
             "variable-severity",
             "common-operations",
             "most-severe-variables",
@@ -831,7 +922,13 @@ def main() -> int:
         elif cmd == "complexity":
             flag_complexity(db)
         elif cmd == "check-descriptions":
-            check_descriptions_v2(db)
+            p = argparse.ArgumentParser()
+            p.add_argument(
+                "runs", help="IDs of the runs to analyze (separated by commas)"
+            )
+            ns = p.parse_args(remaining_args)
+            raw_runs: str = ns.runs
+            check_descriptions_v2(db, raw_runs.split(","))
         elif cmd == "run":
             p = argparse.ArgumentParser()
             p.add_argument("run_id", help="ID of the run (run_started_at)")
@@ -848,6 +945,14 @@ def main() -> int:
             p.add_argument("label", help="Label for the rows in the output csv")
             ns = p.parse_args(remaining_args)
             run_var_counts(db, ns.run_id, ns.label)
+        elif cmd == "var-count-plot":
+            p = argparse.ArgumentParser()
+            p.add_argument(
+                "runs", help="IDs of the runs to analyze (separated by commas)"
+            )
+            ns = p.parse_args(remaining_args)
+            raw_runs: str = ns.runs
+            run_var_count_plot(db, raw_runs.split(","))
         elif cmd == "variable-severity":
             variable_to_severity_correlation(db)
         elif cmd == "common-operations":
@@ -868,6 +973,14 @@ def main() -> int:
             ns = p.parse_args(remaining_args)
             raw_runs: str = ns.runs
             analyze_system_wide_cvss(db, raw_runs.split(","))
+        elif cmd == "export":
+            p = argparse.ArgumentParser()
+            _ = p.add_argument("run_id", help="ID of the run (run_started_at)")
+            _ = p.add_argument("output", help="Path for the output csv")
+            ns = p.parse_args(remaining_args)
+            output_path = cast(str, ns.output)
+            run_id = cast(str, ns.run_id)
+            export_run(db, run_id, output_path)
         else:
             print(f"Unknown command {cmd}!")
             return 1

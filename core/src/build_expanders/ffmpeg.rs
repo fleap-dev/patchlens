@@ -35,8 +35,15 @@ pub fn find_required_configs(ffmpeg_root: &Path, target: &Path) -> Result<Flag> 
     let obj_name = format!("{}.o", base);
 
     // 3) Parse all Makefiles into an obj → Vec<condition-groups> map
+    //    Only consider Makefiles from the same directory as the target file
+    //    to avoid cross-directory basename collisions (e.g., libavcodec/takdec.o
+    //    vs libavformat/takdec.o are completely different files).
+    let target_dir = relative
+        .parent()
+        .context("could not get target directory")?;
     let makefiles = find_all_makefiles(&ffmpeg_root)?;
-    let obj_to_groups = parse_makefiles_for_full_dependency_map(&makefiles)?;
+    let obj_to_groups =
+        parse_makefiles_for_full_dependency_map(&ffmpeg_root, &makefiles, target_dir)?;
 
     // 4) Lookup our .o
     let groups = obj_to_groups
@@ -79,7 +86,9 @@ fn find_all_makefiles(dir: &Path) -> Result<Vec<PathBuf>> {
 }
 
 fn parse_makefiles_for_full_dependency_map(
+    ffmpeg_root: &Path,
     makefiles: &[PathBuf],
+    target_dir: &Path,
 ) -> Result<HashMap<String, Vec<Vec<Flag>>>> {
     let mut obj_to_groups: HashMap<String, Vec<Vec<Flag>>> = HashMap::new();
     let mut prog_to_conds: HashMap<String, HashSet<String>> = HashMap::new();
@@ -94,6 +103,13 @@ fn parse_makefiles_for_full_dependency_map(
     let re_uncond = Regex::new(r"^(?:OBJS|SHLIBOBJS|STLIBOBJS)\s*\+?=\s*(.*)$").unwrap();
 
     for mf in makefiles {
+        // Only process Makefiles from the same directory as the target file
+        let mf_dir = mf
+            .parent()
+            .and_then(|p| p.strip_prefix(ffmpeg_root).ok())
+            .unwrap_or(Path::new(""));
+        let is_target_dir = mf_dir == target_dir;
+
         let text = fs::read_to_string(mf)?;
         let mut buffer = String::new();
 
@@ -105,29 +121,32 @@ fn parse_makefiles_for_full_dependency_map(
             buffer.push_str(line);
             if buffer.ends_with('\\') {
                 buffer.pop();
+                buffer.push(' ');
                 continue;
             }
 
             // Case 1: ARCH-specific OBJS
             if let Some(caps) = re_arch_objs.captures(&buffer) {
-                let var_name = &caps[1];
-                let cfg = &caps[2];
-                let objs = &caps[3];
-                let prefix = var_name.split('-').next().unwrap();
-                let mut conds = HashSet::new();
-                conds.insert(format!("HAVE_{prefix}"));
-                conds.insert(cfg.to_string());
-                for obj in objs.split_whitespace().filter(|o| o.ends_with(".o")) {
-                    let name = Path::new(obj)
-                        .file_name()
-                        .unwrap()
-                        .to_str()
-                        .unwrap()
-                        .to_string();
-                    obj_to_groups
-                        .entry(name)
-                        .or_default()
-                        .push(conds.iter().map(|s| Flag::Defined(s.clone())).collect());
+                if is_target_dir {
+                    let var_name = &caps[1];
+                    let cfg = &caps[2];
+                    let objs = &caps[3];
+                    let prefix = var_name.split('-').next().unwrap();
+                    let mut conds = HashSet::new();
+                    conds.insert(format!("HAVE_{prefix}"));
+                    conds.insert(cfg.to_string());
+                    for obj in objs.split_whitespace().filter(|o| o.ends_with(".o")) {
+                        let name = Path::new(obj)
+                            .file_name()
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                            .to_string();
+                        obj_to_groups
+                            .entry(name)
+                            .or_default()
+                            .push(conds.iter().map(|s| Flag::Defined(s.clone())).collect());
+                    }
                 }
                 buffer.clear();
                 continue;
@@ -165,19 +184,21 @@ fn parse_makefiles_for_full_dependency_map(
 
             // Case 4: direct conditional objs
             if let Some(caps) = re_direct_cond.captures(&buffer) {
-                let cfg = &caps[1];
-                let objs = &caps[2];
-                for obj in objs.split_whitespace().filter(|o| o.ends_with(".o")) {
-                    let name = Path::new(obj)
-                        .file_name()
-                        .unwrap()
-                        .to_str()
-                        .unwrap()
-                        .to_string();
-                    obj_to_groups
-                        .entry(name)
-                        .or_default()
-                        .push(vec![Flag::Defined(cfg.to_string())]);
+                if is_target_dir {
+                    let cfg = &caps[1];
+                    let objs = &caps[2];
+                    for obj in objs.split_whitespace().filter(|o| o.ends_with(".o")) {
+                        let name = Path::new(obj)
+                            .file_name()
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                            .to_string();
+                        obj_to_groups
+                            .entry(name)
+                            .or_default()
+                            .push(vec![Flag::Defined(cfg.to_string())]);
+                    }
                 }
                 buffer.clear();
                 continue;
@@ -185,18 +206,20 @@ fn parse_makefiles_for_full_dependency_map(
 
             // Case 5: unconditional objs
             if let Some(caps) = re_uncond.captures(&buffer) {
-                let objs = &caps[1];
-                for obj in objs.split_whitespace().filter(|o| o.ends_with(".o")) {
-                    let name = Path::new(obj)
-                        .file_name()
-                        .unwrap()
-                        .to_str()
-                        .unwrap()
-                        .to_string();
-                    obj_to_groups
-                        .entry(name)
-                        .or_default()
-                        .push(vec![Flag::True]);
+                if is_target_dir {
+                    let objs = &caps[1];
+                    for obj in objs.split_whitespace().filter(|o| o.ends_with(".o")) {
+                        let name = Path::new(obj)
+                            .file_name()
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                            .to_string();
+                        obj_to_groups
+                            .entry(name)
+                            .or_default()
+                            .push(vec![Flag::True]);
+                    }
                 }
                 buffer.clear();
                 continue;
@@ -268,12 +291,10 @@ fn get_component_condition(relative: &Path) -> Flag {
         .unwrap_or("");
 
     if first.starts_with("lib") {
-        // e.g. "libavcodec" → "CONFIG_AVCODEC"
         let up = first.to_uppercase();
         let tail = up.trim_start_matches("LIB");
         Flag::Defined(format!("CONFIG_{tail}"))
     } else if first == "fftools" {
-        // mirror your Python “!CONFIG_DISABLE_PROGRAMS”
         Flag::Not(Box::new(Flag::Defined(
             "CONFIG_DISABLE_PROGRAMS".to_string(),
         )))

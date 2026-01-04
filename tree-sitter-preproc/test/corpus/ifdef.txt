@@ -1,0 +1,184 @@
+================================================================================
+Simple ifdef
+================================================================================
+#ifdef FOO
+content
+#endif
+--------------------------------------------------------------------------------
+
+(source_file
+  (preproc_ifdef
+    directive: (preproc_directive)
+    name: (identifier)
+    (text_line)))
+
+================================================================================
+Ifndef
+================================================================================
+#ifndef BAR
+stuff
+#endif
+--------------------------------------------------------------------------------
+
+(source_file
+  (preproc_ifdef
+    directive: (preproc_directive)
+    name: (identifier)
+    (text_line)))
+
+================================================================================
+Ifdef with else
+================================================================================
+#ifdef CONFIG_A
+code_a
+#else
+code_b
+#endif
+--------------------------------------------------------------------------------
+
+(source_file
+  (preproc_ifdef
+    directive: (preproc_directive)
+    name: (identifier)
+    (text_line)
+    (preproc_else
+      (text_line))))
+
+================================================================================
+Nested ifdef
+================================================================================
+#ifdef OUTER
+outer_code
+#ifdef INNER
+inner_code
+#endif
+#endif
+--------------------------------------------------------------------------------
+
+(source_file
+  (preproc_ifdef
+    directive: (preproc_directive)
+    name: (identifier)
+    (text_line)
+    (preproc_ifdef
+      directive: (preproc_directive)
+      name: (identifier)
+      (text_line))))
+
+================================================================================
+Ifdef with endif comment
+================================================================================
+#ifdef FOO
+content
+#endif /* FOO */
+--------------------------------------------------------------------------------
+
+(source_file
+  (preproc_ifdef
+    directive: (preproc_directive)
+    name: (identifier)
+    (text_line))
+  (comment))
+
+================================================================================
+Nested ifdef with endif comments
+================================================================================
+#ifdef OUTER
+outer_code
+#ifdef INNER
+inner_code
+#endif /* INNER */
+#endif /* OUTER */
+--------------------------------------------------------------------------------
+
+(source_file
+  (preproc_ifdef
+    directive: (preproc_directive)
+    name: (identifier)
+    (text_line)
+    (preproc_ifdef
+      directive: (preproc_directive)
+      name: (identifier)
+      (text_line)
+      (comment)))
+  (comment))
+
+================================================================================
+Spaced ifdef
+================================================================================
+# ifdef FOO
+content
+# endif
+--------------------------------------------------------------------------------
+
+(source_file
+  (preproc_ifdef
+    directive: (preproc_directive)
+    name: (identifier)
+    (text_line)))
+
+================================================================================
+Spaced ifndef with else
+================================================================================
+# ifndef BAR
+code_a
+# else
+code_b
+# endif
+--------------------------------------------------------------------------------
+
+(source_file
+  (preproc_ifdef
+    directive: (preproc_directive)
+    name: (identifier)
+    (text_line)
+    (preproc_else
+      (text_line))))
+
+================================================================================
+Ifdef with elif
+================================================================================
+#ifdef __i386__
+code_32
+#elif defined(__ILP32__)
+code_x32
+#else
+code_64
+#endif
+--------------------------------------------------------------------------------
+
+(source_file
+  (preproc_ifdef
+    directive: (preproc_directive)
+    name: (identifier)
+    (text_line)
+    (preproc_elif
+      condition: (preproc_defined
+        name: (identifier))
+      (text_line))
+    (preproc_else
+      (text_line))))
+
+================================================================================
+Spaced ifdef with elif
+================================================================================
+# ifdef __i386__
+code_32
+# elif defined(__ILP32__)
+code_x32
+# else
+code_64
+# endif
+--------------------------------------------------------------------------------
+
+(source_file
+  (preproc_ifdef
+    directive: (preproc_directive)
+    name: (identifier)
+    (text_line)
+    (preproc_elif
+      condition: (preproc_defined
+        name: (identifier))
+      (text_line))
+    (preproc_else
+      (text_line))))

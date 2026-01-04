@@ -5,9 +5,10 @@ use patchlens::{
     analyze_variants_affected, build_expanders, mail_utils, patch_utils, preprocessor,
 };
 use std::ffi::OsStr;
-use std::io::{BufWriter, Read, Write as _};
+use std::io::{BufWriter, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use tempfile::NamedTempFile;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 #[derive(ClapParser, Debug)]
@@ -24,6 +25,8 @@ struct Cli {
         help = "Path to the binary that will be used to simplify the resulting impact condition"
     )]
     simplify_with: Option<PathBuf>,
+    #[arg(long, default_value_t = false)]
+    explain: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -120,25 +123,55 @@ fn main() -> anyhow::Result<()> {
                             .context("failed to apply patch"),
                     )
                 })
+                // .map(|(filename, patched_source_result)| {
+                //     (
+                //         filename,
+                //         patched_source_result.and_then(|patched_source| {
+                //             preprocessor::expand_include_macros(
+                //                 &patched_source,
+                //                 Path::new(filename),
+                //                 &include_dirs,
+                //             )
+                //         }),
+                //     )
+                // })
                 .map(|(filename, patched_source_result)| {
-                    (
-                        filename,
-                        patched_source_result.and_then(|patched_source| {
-                            preprocessor::expand_include_macros(
-                                &patched_source,
-                                Path::new(filename),
-                                &include_dirs,
-                            )
-                        }),
-                    )
+                    if args.explain {
+                        // If explain flag is set, create temp files to store
+                        // the patched source code for manual inspection
+                        let suffix = format!("patchlens-{}", filename.replace("/", "-"));
+                        let (mut tmpfile, path) = NamedTempFile::with_suffix(suffix)
+                            .expect("failed to create temp file to store patched source")
+                            .keep()
+                            .unwrap();
+                        let src = patched_source_result
+                            .expect("failed to get the source code to save in temp file");
+
+                        write!(tmpfile, "{}", src).unwrap();
+
+                        eprintln!(
+                            "[Explain] Saved patches source of '{filename}' to '{:?}'",
+                            path
+                        );
+
+                        (filename, Ok(src))
+                    } else {
+                        (filename, patched_source_result)
+                    }
                 })
                 .map(|(filename, patched_source_result)| {
                     (
                         filename,
                         patched_source_result.map(|patched_source| {
-                            analyze_variants_affected(&patched_source, filename)
+                            analyze_variants_affected(&patched_source, filename, args.explain)
                         }),
                     )
+                })
+                .map(|(filename, flag)| {
+                    if args.explain {
+                        eprintln!("[Explain] File '{filename}' has condition '{flag:#?}'")
+                    }
+                    (filename, flag)
                 })
                 .map(|(_filename, flag)| flag)
                 .collect::<anyhow::Result<Vec<_>>>()
@@ -153,7 +186,7 @@ fn main() -> anyhow::Result<()> {
                     }
                     let file = git_repo.join(file);
 
-                    match expander {
+                    let build_system_flags = match expander {
                         BuildSystemExpander::Linux => {
                             build_expanders::linux::find_required_configs(&git_repo, &file).expect(
                                 &format!("failed to find required configs for {}", file.display()),
@@ -176,7 +209,15 @@ fn main() -> anyhow::Result<()> {
                                     file.display()
                                 ))
                         }
+                    };
+
+                    if args.explain {
+                        println!(
+                            "[Explain] Build system flags for '{file:?}' = {build_system_flags}"
+                        )
                     }
+
+                    build_system_flags
                 });
             }
 
@@ -205,7 +246,7 @@ fn main() -> anyhow::Result<()> {
                 &include_dirs,
             )?;
 
-            let variants = analyze_variants_affected(&expanded_source, patched_file);
+            let variants = analyze_variants_affected(&expanded_source, patched_file, args.explain);
 
             println!("{variants}");
         }

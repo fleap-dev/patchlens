@@ -61,13 +61,13 @@ pub fn find_required_configs(linux_root: &Path, target: &Path) -> anyhow::Result
             ("ipc/", Flag::True),
             ("security/", Flag::True),
             ("crypto/", Flag::True),
-            ("block/", Flag::defined("CONFIG_BLOCK")),
+            ("block/", Flag::True),
             ("io_uring/", Flag::defined("CONFIG_IO_URING")),
             ("rust/", Flag::defined("CONFIG_RUST")),
             ("drivers/", Flag::True),
             ("sound/", Flag::True),
             ("samples/", Flag::defined("CONFIG_SAMPLES")),
-            ("net/", Flag::defined("CONFIG_NET")),
+            ("net/", Flag::True),
             ("virt/", Flag::True),
             ("lib/", Flag::True),
         ],
@@ -196,7 +196,7 @@ pub fn find_required_configs_with_reader<R: KBuildReader>(
 
     // 4) Conjoin (or True)
     Ok(if conditions.is_empty() {
-        Flag::True
+        Flag::True // Approx if not found
     } else {
         Flag::And(conditions)
     })

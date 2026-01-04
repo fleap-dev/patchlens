@@ -1,0 +1,209 @@
+================================================================================
+If with defined
+================================================================================
+#if defined(CONFIG_A)
+code
+#endif
+--------------------------------------------------------------------------------
+
+(source_file
+  (preproc_if
+    condition: (preproc_defined
+      name: (identifier))
+    (text_line)))
+
+================================================================================
+If with defined no parens
+================================================================================
+#if defined CONFIG_B
+code
+#endif
+--------------------------------------------------------------------------------
+
+(source_file
+  (preproc_if
+    condition: (preproc_defined
+      name: (identifier))
+    (text_line)))
+
+================================================================================
+If with logical and
+================================================================================
+#if defined(A) && defined(B)
+code
+#endif
+--------------------------------------------------------------------------------
+
+(source_file
+  (preproc_if
+    condition: (binary_expression
+      left: (preproc_defined
+        name: (identifier))
+      operator: (operator)
+      right: (preproc_defined
+        name: (identifier)))
+    (text_line)))
+
+================================================================================
+If with logical or
+================================================================================
+#if defined(X) || defined(Y)
+code
+#endif
+--------------------------------------------------------------------------------
+
+(source_file
+  (preproc_if
+    condition: (binary_expression
+      left: (preproc_defined
+        name: (identifier))
+      operator: (operator)
+      right: (preproc_defined
+        name: (identifier)))
+    (text_line)))
+
+================================================================================
+If with negation
+================================================================================
+#if !defined(DEBUG)
+code
+#endif
+--------------------------------------------------------------------------------
+
+(source_file
+  (preproc_if
+    condition: (unary_expression
+      operator: (operator)
+      argument: (preproc_defined
+        name: (identifier)))
+    (text_line)))
+
+================================================================================
+If with number literal
+================================================================================
+#if 1
+code
+#endif
+--------------------------------------------------------------------------------
+
+(source_file
+  (preproc_if
+    condition: (number_literal)
+    (text_line)))
+
+================================================================================
+If with zero
+================================================================================
+#if 0
+disabled
+#endif
+--------------------------------------------------------------------------------
+
+(source_file
+  (preproc_if
+    condition: (number_literal)
+    (text_line)))
+
+================================================================================
+If with identifier
+================================================================================
+#if MY_MACRO
+code
+#endif
+--------------------------------------------------------------------------------
+
+(source_file
+  (preproc_if
+    condition: (identifier)
+    (text_line)))
+
+================================================================================
+If with parenthesized expression
+================================================================================
+#if (defined(A) || defined(B)) && defined(C)
+code
+#endif
+--------------------------------------------------------------------------------
+
+(source_file
+  (preproc_if
+    condition: (binary_expression
+      left: (parenthesized_expression
+        (binary_expression
+          left: (preproc_defined
+            name: (identifier))
+          operator: (operator)
+          right: (preproc_defined
+            name: (identifier))))
+      operator: (operator)
+      right: (preproc_defined
+        name: (identifier)))
+    (text_line)))
+
+================================================================================
+If with elif and else
+================================================================================
+#if defined(A)
+code_a
+#elif defined(B)
+code_b
+#else
+code_c
+#endif
+--------------------------------------------------------------------------------
+
+(source_file
+  (preproc_if
+    condition: (preproc_defined
+      name: (identifier))
+    (text_line)
+    (preproc_elif
+      condition: (preproc_defined
+        name: (identifier))
+      (text_line))
+    (preproc_else
+      (text_line))))
+
+================================================================================
+Spaced if with else
+================================================================================
+# if defined(__x86_64__) && !defined(__ILP32__)
+code_64
+# else
+code_32
+# endif
+--------------------------------------------------------------------------------
+
+(source_file
+  (preproc_if
+    condition: (binary_expression
+      left: (preproc_defined
+        name: (identifier))
+      operator: (operator)
+      right: (unary_expression
+        operator: (operator)
+        argument: (preproc_defined
+          name: (identifier))))
+    (text_line)
+    (preproc_else
+      (text_line))))
+
+================================================================================
+Spaced elif
+================================================================================
+# if defined(A)
+code_a
+# elif defined(B)
+code_b
+# endif
+--------------------------------------------------------------------------------
+
+(source_file
+  (preproc_if
+    condition: (preproc_defined
+      name: (identifier))
+    (text_line)
+    (preproc_elif
+      condition: (preproc_defined
+        name: (identifier))
+      (text_line))))
