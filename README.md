@@ -19,7 +19,8 @@ This repository contains all code and scripts related to PatchLens.
 
 ## Building from Source
 
-PatchLens is written in Rust. You can build the project using Cargo:
+
+PatchLens is written in Rust, so you need to install Rust first. You can install Rust by following the instructions on [the official Rust website](https://www.rust-lang.org/). After installing Rust, you can build the project using Cargo:
 
 ```bash
 # Build the project in release mode
