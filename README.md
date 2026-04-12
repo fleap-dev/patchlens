@@ -97,7 +97,7 @@ Additionally, the `soundness/illustrative_examples` folder contains examples of 
 ## Support and contact
 
 If you have any questions, suggestions or bug reports, please open an issue or contact us at:
-- _emails addresses will be unredacted after the review process_
+- fleap@fleap.dev
 
 ## Citation
 
