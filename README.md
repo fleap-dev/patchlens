@@ -79,6 +79,12 @@ To generate the Patch dataset, automate patchlens and analyze the results, do:
 ```bash
 # Script deps will be automatically downloaded with UV.
 ./scripts/make_dataset.py
+
+# Use --sources to choose where patches come from (default: github-refs,patchdb)
+./scripts/make_dataset.py --sources github-refs,patchdb,git-kernel
+# NOTE: `github-refs` mines GitHub commits from CVE references tagged as `patch`.
+# NOTE: `patchdb` downloads the PatchDB dataset.
+# NOTE: `git-kernel` mines Linux kernel commits on git.kernel.org from CVE references tagged as `patch`.
 ```
 3. Analyze a target repo:
 ```bash
@@ -87,6 +93,7 @@ To generate the Patch dataset, automate patchlens and analyze the results, do:
 # NOTE: The `linux/linux_kernel` parameter is used to filter patches to match this vendor/product.
 # NOTE: The `./data/patchlens-repos/linux/` should point to the path to the Git repository of the target system.
 # NOTE: The `-E linux` parameter specifies which type of build-system analysis to be used. In this case, analyze Linux kbuild files.
+# NOTE: Patches from `git-kernel` whose commit is not in the repository (e.g., stable backports in a mainline clone) are recorded as `CheckoutError`.
 ```
 
 ## Soundness tests

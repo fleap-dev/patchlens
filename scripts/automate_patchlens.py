@@ -20,13 +20,20 @@ from typing import List, Literal, Optional, Tuple
 import requests
 from simplifier import ExpressionSimplifier
 
+# Patches of the `git-kernel` source are downloaded by commit hash from the stable tree,
+# which contains both mainline commits and stable backports.
+GIT_KERNEL_PATCH_URL = "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/patch/?id={commit}"
+
+# git.kernel.org rejects the default `python-requests` User-Agent (403 Forbidden)
+USER_AGENT = "patchlens-scripts (https://github.com/fleap-dev/patchlens)"
+
 
 @dataclass
 class PatchRow:
     patch_id: str
     cve_id: str
     configurations: str
-    source: Literal["github", "patchdb"]
+    source: Literal["github", "patchdb", "git-kernel"]
     patch_file: str | None
     github_patch_url: str | None
 
@@ -180,13 +187,24 @@ def get_patches(db: sqlite3.Connection, product: str) -> list[PatchRow]:
     return rows
 
 
-def download_patch_from_github(url: str, output_path: str) -> str:
-    response = requests.get(url + ".patch")
+def download_patch(url: str, output_path: str) -> str:
+    response = requests.get(url, headers={"User-Agent": USER_AGENT})
     if response.status_code != 200:
         raise ValueError(f"Failed to download patch from {url}")
     with open(output_path, "wb") as f:
         f.write(response.content)
     return output_path
+
+
+def commit_exists(repo_path: str, rev: str) -> bool:
+    proc = subprocess.run(
+        ["git", "cat-file", "-e", f"{rev}^{{commit}}"],
+        cwd=repo_path,
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return proc.returncode == 0
 
 
 def process_patch(
@@ -200,16 +218,30 @@ def process_patch(
 
     if patch_info.patch_file is not None:
         patch_file = os.path.join(patches_folder, patch_info.patch_file)
-    else:
-        if patch_info.github_patch_url is None:
-            raise ValueError("No patch file or github URL provided")
+    elif patch_info.github_patch_url is not None:
         github_patches_folder = os.path.join(patches_folder, "github")
         if not os.path.isdir(github_patches_folder):
             os.makedirs(github_patches_folder)
-        patch_file = download_patch_from_github(
-            patch_info.github_patch_url,
+        patch_file = download_patch(
+            patch_info.github_patch_url + ".patch",
             os.path.join(github_patches_folder, patch_info.patch_id + ".txt"),
         )
+    elif patch_info.source == "git-kernel":
+        # Most git.kernel.org refs point to stable backports (`/stable/c/<hash>`), which are
+        # missing from mainline clones. Fail early instead of downloading a patch we can't check out.
+        if not commit_exists(repo_path, patch_info.patch_id):
+            raise CheckoutError(
+                f"Commit {patch_info.patch_id} not found in the repository"
+            )
+        git_kernel_patches_folder = os.path.join(patches_folder, "git-kernel")
+        if not os.path.isdir(git_kernel_patches_folder):
+            os.makedirs(git_kernel_patches_folder)
+        patch_file = download_patch(
+            GIT_KERNEL_PATCH_URL.format(commit=patch_info.patch_id),
+            os.path.join(git_kernel_patches_folder, patch_info.patch_id + ".txt"),
+        )
+    else:
+        raise ValueError("No patch file or patch URL provided")
 
     try:
         rev, _ = get_patch_info(patch_file)
@@ -366,9 +398,11 @@ def main():
         print(f"Repository not found at {repository_path}!")
         return
 
+    # Datasets built without the patchdb source have no patches folder.
+    # In that case, it only stores the downloaded patches
     if not os.path.isdir(patches_folder):
-        print(f"Patches folder not found at {patches_folder}!")
-        return
+        print(f"[WARN] Patches folder not found at {patches_folder}! Creating...")
+        os.makedirs(patches_folder)
 
     if os.path.exists(output_file):
         print("[WARN] Output file already exists! Appending data...")
@@ -395,7 +429,7 @@ def main():
     for patch in patches:
         try:
             print(
-                f"Processing {patch.patch_file if patch.patch_file else patch.github_patch_url} for {patch.cve_id}"
+                f"Processing {patch.patch_file or patch.github_patch_url or f'{patch.source}/{patch.patch_id}'} for {patch.cve_id}"
             )
             (result_flag, patchlens_time_ms, checkout_time_ms) = process_patch(
                 repository_path,

@@ -43,6 +43,22 @@ GITHUB_COMMIT_REGEX = re.compile(
     r"(?P<hash>[0-9a-f]{40})$"  # exactly 40 lowercase hex chars
 )
 
+# Commits from Linux kernel trees hosted on git.kernel.org. Matches the short links
+# (e.g. `/stable/c/<hash>`, used by the kernel CNA) and cgit pages of any tree under
+# `linux/kernel/git/` (e.g. `/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=<hash>`).
+# Other projects hosted on git.kernel.org (bluez, connman, ...) are not matched.
+GIT_KERNEL_COMMIT_REGEX = re.compile(
+    r"^https?://git\.kernel\.org/"  # protocol + domain
+    r"(?:"
+    r"(?:stable/c|linus)/"  # short links
+    r"|(?:pub/scm|cgit)/linux/kernel/git/[^?]+\?(?:[^&]+&)*id="  # cgit commit/patch pages
+    r")"
+    r"(?P<hash>[0-9a-f]{40})$"  # exactly 40 lowercase hex chars
+)
+
+# Valid values for the `--sources` flag
+SOURCES = ("github-refs", "patchdb", "git-kernel")
+
 
 @dataclass
 class Patch:
@@ -122,6 +138,9 @@ def calculate_probable_product(configurations: list[str]) -> Optional[str]:
 def read_patch_db(path: str) -> list[Patch]:
     patches = []
     for filename in os.listdir(path):
+        # Skip the folders of patches downloaded by automate_patchlens.py (e.g. `github/`)
+        if not os.path.isfile(os.path.join(path, filename)):
+            continue
         cve, _, _ = filename.rpartition("-")
         id = filename[(len(cve) + 1) : -4]
         patches.append(
@@ -138,7 +157,7 @@ def read_patch_db(path: str) -> list[Patch]:
 def upsert_patches(
     db: sqlite3.Connection,
     patches: list[Patch],
-    source: Literal["patchdb"] | Literal["github"],
+    source: Literal["patchdb", "github", "git-kernel"],
 ):
     if source == "patchdb":
         query = """
@@ -170,6 +189,21 @@ def upsert_patches(
                 github_patch_url = excluded.github_patch_url;
         """
         values = [(p.id, source, p.cve_id, p.github_patch_url) for p in patches]
+        db.executemany(query, values)
+        db.commit()
+    elif source == "git-kernel":
+        # No URL is stored: automate_patchlens.py downloads these patches by commit hash (the id)
+        query = """
+            INSERT INTO "patches" (
+                id,
+                source,
+                cve_id
+            ) VALUES (?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                cve_id = excluded.cve_id,
+                source = excluded.source;
+        """
+        values = [(p.id, source, p.cve_id) for p in patches]
         db.executemany(query, values)
         db.commit()
     else:
@@ -257,9 +291,18 @@ def extract_github_commit_hash(url: str) -> str | None:
     return m.group("hash") if m else None
 
 
-def collect_cve_data(cve_data_folder, year) -> tuple[list[dict[str, Any]], list[Patch]]:
+def extract_git_kernel_commit_hash(url: str) -> str | None:
+    m = GIT_KERNEL_COMMIT_REGEX.match(url)
+    return m.group("hash") if m else None
+
+
+def collect_cve_data(
+    cve_data_folder, year
+) -> tuple[list[dict[str, Any]], list[Patch], list[Patch]]:
     """
     Collect the CVE data from the NVD data.
+    Returns the CVEs, the GitHub patches and the git.kernel.org patches
+    (both taken from references tagged as `patch`).
     """
     filename = f"nvdcve-1.1-{year}.json"
     filepath = os.path.join(cve_data_folder, filename)
@@ -276,7 +319,8 @@ def collect_cve_data(cve_data_folder, year) -> tuple[list[dict[str, Any]], list[
     cves = data["vulnerabilities"]
 
     entries = []
-    patches = []
+    github_patches = []
+    git_kernel_patches = []
     skipped = 0
     processed = 0
     for row in cves:
@@ -346,7 +390,6 @@ def collect_cve_data(cve_data_folder, year) -> tuple[list[dict[str, Any]], list[
             "patch_ref_count": 0,
             "published_at": row["cve"]["published"],
         }
-        cve_patches = []
         for ref in row["cve"]["references"]:
             url = ref["url"]
             if ref.get("tags") and "patch" in list(
@@ -355,7 +398,7 @@ def collect_cve_data(cve_data_folder, year) -> tuple[list[dict[str, Any]], list[
                 entry["patch_ref_count"] += 1
                 commit = extract_github_commit_hash(url)
                 if commit is not None:
-                    cve_patches.append(
+                    github_patches.append(
                         Patch(
                             id=commit,
                             cve_id=entry["cve_id"],
@@ -363,7 +406,16 @@ def collect_cve_data(cve_data_folder, year) -> tuple[list[dict[str, Any]], list[
                             patch_file=None,
                         )
                     )
-        patches.extend(cve_patches)
+                commit = extract_git_kernel_commit_hash(url)
+                if commit is not None:
+                    git_kernel_patches.append(
+                        Patch(
+                            id=commit,
+                            cve_id=entry["cve_id"],
+                            github_patch_url=None,
+                            patch_file=None,
+                        )
+                    )
 
         entries.append(entry)
         processed += 1
@@ -375,59 +427,13 @@ def collect_cve_data(cve_data_folder, year) -> tuple[list[dict[str, Any]], list[
             f"[WARN] {skipped} cves were skipped due to not having a correct configurations column"
         )
 
-    return (entries, patches)
+    return (entries, github_patches, git_kernel_patches)
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--cve-data-folder",
-        default="data/nvd",
-        help="The folder where the nvd data is located",
-    )
-    parser.add_argument(
-        "--patches-folder",
-        default="data/patches",
-        help="The folder where the patches are located",
-    )
-    parser.add_argument(
-        "--output",
-        default="data/cve-dataset.db",
-        help="The output file for the database",
-    )
-
-    args = parser.parse_args()
-
-    cve_data_folder: str = args.cve_data_folder
-    patches_folder: str = args.patches_folder
-    output_file: str = args.output
-
-    # Check if the default ./data folder is being used.
-    # If so, create it if it does not exist
-    if (
-        cve_data_folder.startswith("data/")
-        or patches_folder.startswith("data/")
-        or output_file.startswith("data/")
-    ):
-        if not os.path.isdir("data"):
-            os.mkdir("data")
-
-    if not os.path.isdir(cve_data_folder):
-        print("NVD data folder not found! Creating...")
-        os.makedirs(cve_data_folder)
-
-    download_nvd_data(cve_data_folder)
-
-    csv.field_size_limit(sys.maxsize)
-
-    db = sqlite3.connect(output_file)
-    setup_tables(db)
-
-    for year in range(2002, datetime.now().year + 1):
-        cves, patches = collect_cve_data(cve_data_folder, year)
-        upsert_cves(db, cves)
-        upsert_patches(db, patches, "github")
-
+def collect_patchdb_patches(db: sqlite3.Connection, patches_folder: str):
+    """
+    Downloads the PatchDB archive (if `patches_folder` does not exist) and inserts its patches.
+    """
     if not os.path.exists(patches_folder):
         print("Patches folder not found! Downloading patchdb archive...")
         with tempfile.NamedTemporaryFile(delete=True, suffix=".zip") as tmp:
@@ -456,6 +462,87 @@ def main():
     print("Processing patches from patchdb...")
 
     upsert_patches(db, patchdb_patches, "patchdb")
+
+
+def parse_sources(value: str) -> set[str]:
+    """
+    Parses the comma-separated list of the `--sources` flag (e.g. `github-refs,git-kernel`).
+    """
+    sources = {source.strip() for source in value.split(",") if source.strip()}
+    if not sources:
+        raise argparse.ArgumentTypeError("at least one source is required")
+    invalid = sources - set(SOURCES)
+    if invalid:
+        raise argparse.ArgumentTypeError(
+            f"invalid source(s): {', '.join(sorted(invalid))}. Valid options are: {', '.join(SOURCES)}"
+        )
+    return sources
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--cve-data-folder",
+        default="data/nvd",
+        help="The folder where the nvd data is located",
+    )
+    parser.add_argument(
+        "--patches-folder",
+        default="data/patches",
+        help="The folder where the patches are located",
+    )
+    parser.add_argument(
+        "--output",
+        default="data/cve-dataset.db",
+        help="The output file for the database",
+    )
+    parser.add_argument(
+        "--sources",
+        type=parse_sources,
+        default="github-refs,patchdb",
+        help=f"Comma-separated list of patch sources. Valid options: {', '.join(SOURCES)} (default: github-refs,patchdb)",
+    )
+
+    args = parser.parse_args()
+
+    cve_data_folder: str = args.cve_data_folder
+    patches_folder: str = args.patches_folder
+    output_file: str = args.output
+    sources: set[str] = args.sources
+
+    # Check if the default ./data folder is being used.
+    # If so, create it if it does not exist
+    if (
+        cve_data_folder.startswith("data/")
+        or patches_folder.startswith("data/")
+        or output_file.startswith("data/")
+    ):
+        if not os.path.isdir("data"):
+            os.mkdir("data")
+
+    if not os.path.isdir(cve_data_folder):
+        print("NVD data folder not found! Creating...")
+        os.makedirs(cve_data_folder)
+
+    download_nvd_data(cve_data_folder)
+
+    csv.field_size_limit(sys.maxsize)
+
+    db = sqlite3.connect(output_file)
+    setup_tables(db)
+
+    for year in range(2002, datetime.now().year + 1):
+        cves, github_patches, git_kernel_patches = collect_cve_data(
+            cve_data_folder, year
+        )
+        upsert_cves(db, cves)
+        if "github-refs" in sources:
+            upsert_patches(db, github_patches, "github")
+        if "git-kernel" in sources:
+            upsert_patches(db, git_kernel_patches, "git-kernel")
+
+    if "patchdb" in sources:
+        collect_patchdb_patches(db, patches_folder)
 
     print("Completed.")
 
