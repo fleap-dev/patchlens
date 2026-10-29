@@ -3,7 +3,7 @@
 # requires-python = ">=3.13"
 # dependencies = [
 #     "cpeparser",
-#     "gdown",
+#     "gdown>=6",
 # ]
 # ///
 
@@ -437,7 +437,7 @@ def collect_patchdb_patches(db: sqlite3.Connection, patches_folder: str):
     if not os.path.exists(patches_folder):
         print("Patches folder not found! Downloading patchdb archive...")
         with tempfile.NamedTemporaryFile(delete=True, suffix=".zip") as tmp:
-            gdown.download(PATCHDB_DRIVE_URL, tmp, quiet=False, fuzzy=True)
+            gdown.download(PATCHDB_DRIVE_URL, tmp, quiet=False)
             print("Extracting patches from patchdb archive...")
             os.mkdir(patches_folder)
             with zipfile.ZipFile(tmp, "r") as zip_ref:
