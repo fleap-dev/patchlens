@@ -94,6 +94,7 @@ To generate the Patch dataset, automate patchlens and analyze the results, do:
 # NOTE: The `./data/patchlens-repos/linux/` should point to the path to the Git repository of the target system.
 # NOTE: The `-E linux` parameter specifies which type of build-system analysis to be used. In this case, analyze Linux kbuild files.
 # NOTE: Patches from `git-kernel` are generated from the repository with `git format-patch`. Those whose commit is not in the repository (e.g., stable backports in a mainline clone) are recorded as `CheckoutError`.
+# NOTE: With `-E linux`, the repository is only read. PatchLens runs on a temporary directory holding the files it reads at the parent commit: the patched files and the Kbuild/Makefile of each parent directory. Other expanders check out the parent commit in the repository, after a `git clean -fd`.
 ```
 
 ## Soundness tests

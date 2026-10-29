@@ -8,10 +8,12 @@
 # ///
 
 import argparse
+import io
 import os
 import re
 import sqlite3
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -112,7 +114,7 @@ def get_patch_info(patch_file_path: str) -> Tuple[Optional[str], List[str]]:
     """
     Parses the patch file and returns:
       - The commit revision from the "From <revision>" line (or None if not found).
-      - A list of modified file paths from diff headers.
+      - A list of modified file paths from diff headers. Renamed files appear under both names.
 
     :param patch_file_path: Path to the Git patch file.
     :return: A tuple (commit revision, list of modified files).
@@ -138,9 +140,12 @@ def get_patch_info(patch_file_path: str) -> Tuple[Optional[str], List[str]]:
             # Capture modified file paths from diff headers
             diff_match = diff_header_pattern.match(line)
             if diff_match:
-                # Use the new file path from the diff header (group 2)
-                modified_file: str = diff_match.group(2)
-                modified_files.append(modified_file)
+                # The new path (group 2), plus the old one (group 1) for renames:
+                # `patch` reads the old file, PatchLens's expanders look up the new one.
+                old_file, new_file = diff_match.group(1), diff_match.group(2)
+                modified_files.append(new_file)
+                if old_file != new_file:
+                    modified_files.append(old_file)
 
     return commit_revision, modified_files
 
@@ -217,6 +222,119 @@ def commit_exists(repo_path: str, rev: str) -> bool:
     return proc.returncode == 0
 
 
+# Writes to `output_dir` the files PatchLens reads with `-e linux` at `rev`, as a checkout would.
+# These are the patched files, plus `Kbuild`, `Kbuild.src` and `Makefile` in each of their parent
+# directories up to the root. Paths missing at `rev` are left out, so `find_makefile`
+# (`core/src/build_expanders/linux.rs`) picks the same one as in a checkout. If the Linux
+# expander starts reading other files, this list must change too.
+def write_linux_tree(
+    repo_path: str, rev: str, patched_files: List[str], output_dir: str
+) -> None:
+    if not commit_exists(repo_path, rev):
+        raise CheckoutError(f"Revision {rev} not found in the repository")
+
+    paths = set(patched_files)
+    for file in patched_files:
+        directory = os.path.dirname(file)
+        while True:
+            for name in ("Kbuild", "Kbuild.src", "Makefile"):
+                paths.add(os.path.join(directory, name))
+            if not directory:
+                break
+            directory = os.path.dirname(directory)
+
+    # One `cat-file --batch` call answers every lookup, in order, with the raw blob bytes
+    # (Linux has no checkout filters).
+    queries = sorted(paths)
+    output = io.BytesIO(
+        subprocess.run(
+            ["git", "cat-file", "--batch"],
+            cwd=repo_path,
+            input="".join(f"{rev}:{path}\n" for path in queries).encode(),
+            check=True,
+            stdout=subprocess.PIPE,
+        ).stdout
+    )
+    for path in queries:
+        # Each answer is "<query> missing\n" or "<oid> <type> <size>\n<content>\n".
+        header = output.readline().rstrip(b"\n")
+        if header.endswith(b" missing"):
+            continue
+        _, object_type, size = header.split()
+        content = output.read(int(size))
+        output.read(1)
+        if object_type != b"blob":
+            continue
+        destination = os.path.join(output_dir, path)
+        os.makedirs(os.path.dirname(destination), exist_ok=True)
+        with open(destination, "wb") as f:
+            f.write(content)
+
+
+# Runs PatchLens on `patch_file` against the source tree at `tree`, and returns the
+# simplified flag and the time PatchLens took.
+def run_patchlens(
+    patchlens_executable: str,
+    expand_building_flags_with: Optional[str],
+    tree: str,
+    patch_file: str,
+    rev: Optional[str],
+) -> Tuple[str, float]:
+    try:
+        command = (
+            [
+                patchlens_executable,
+                "-e",
+                expand_building_flags_with,
+                "analyze-git",
+                tree,
+                patch_file,
+            ]
+            if expand_building_flags_with
+            else [patchlens_executable, "analyze-git", tree, patch_file]
+        )
+        patchlens_time_start = time.perf_counter()
+        proc = subprocess.run(
+            command,  # Command to run (as a string)
+            cwd=tree,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            patchlens_time_end = time.perf_counter()
+            patchlens_time_ms = patchlens_time_end - patchlens_time_start
+            decoded = proc.stdout.decode("utf-8")
+            simplifier = ExpressionSimplifier()
+            simp = simplifier.simplify(decoded)
+            print(f"{decoded} -> {simp}")
+            return (simp, patchlens_time_ms)
+        except UnicodeError as error:
+            raise PatchlensError(
+                f"Invalid unicode output from patchlens on {rev}: {error}"
+            )
+    except subprocess.CalledProcessError as error:
+        if error.stderr:
+            try:
+                decoded: str = error.stderr.decode("utf-8")
+                if (
+                    "flag expansion for header files is still not implemented"
+                    in decoded
+                ):
+                    raise ModifiesHeaderFiles(
+                        f"Patch modifies a C header file on {rev}: {error}"
+                    )
+                if "this patch modifies a file that is not a c file" in decoded:
+                    raise DoesNotModifyCSource(
+                        f"Patch does not modify a C source file on {rev}: {error}"
+                    )
+            except UnicodeError as _:
+                pass
+        raise PatchlensError(
+            f"Error processing commit {rev}: {error}\nSTDOUT: {error.stdout}\nSTDERR: {error.stderr}"
+        )
+
+
 def process_patch(
     repo_path: str,
     patch_info: PatchRow,
@@ -256,9 +374,23 @@ def process_patch(
         raise ValueError("No patch file or patch URL provided")
 
     try:
-        rev, _ = get_patch_info(patch_file)
+        rev, modified_files = get_patch_info(patch_file)
     except UnicodeDecodeError:
         raise CheckoutError(f"Failed to decode UTF-8 in patch file {patch_file}")
+
+    # With `-E linux`, PatchLens runs on a temp dir holding only the files it reads at `rev~1`,
+    # instead of a checkout of the whole tree. This takes milliseconds instead of about 1 s, and
+    # leaves the repository untouched. The other expanders read more of the tree (FFmpeg reads
+    # every Makefile), so they keep the clean and checkout below.
+    if expand_building_flags_with == "linux":
+        with tempfile.TemporaryDirectory(prefix="patchlens-linux-") as tree:
+            checkout_start = time.perf_counter()
+            write_linux_tree(repo_path, f"{rev}~1", modified_files, tree)
+            checkout_time_ms = time.perf_counter() - checkout_start
+            flag, patchlens_time_ms = run_patchlens(
+                patchlens_executable, expand_building_flags_with, tree, patch_file, rev
+            )
+            return (flag, patchlens_time_ms, checkout_time_ms)
 
     checkout_start = time.perf_counter()
     try:
@@ -282,60 +414,10 @@ def process_patch(
     checkout_end = time.perf_counter()
     checkout_time_ms = checkout_end - checkout_start
 
-    try:
-        # Run your custom command on the checked-out commit
-        command = (
-            [
-                patchlens_executable,
-                "-e",
-                expand_building_flags_with,
-                "analyze-git",
-                repo_path,
-                patch_file,
-            ]
-            if expand_building_flags_with
-            else [patchlens_executable, "analyze-git", repo_path, patch_file]
-        )
-        patchlens_time_start = time.perf_counter()
-        proc = subprocess.run(
-            command,  # Command to run (as a string)
-            cwd=repo_path,
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        try:
-            patchlens_time_end = time.perf_counter()
-            patchlens_time_ms = patchlens_time_end - patchlens_time_start
-            decoded = proc.stdout.decode("utf-8")
-            simplifier = ExpressionSimplifier()
-            simp = simplifier.simplify(decoded)
-            print(f"{decoded} -> {simp}")
-            return (simp, patchlens_time_ms, checkout_time_ms)
-        except UnicodeError as error:
-            raise PatchlensError(
-                f"Invalid unicode output from patchlens on {rev}: {error}"
-            )
-    except subprocess.CalledProcessError as error:
-        if error.stderr:
-            try:
-                decoded: str = error.stderr.decode("utf-8")
-                if (
-                    "flag expansion for header files is still not implemented"
-                    in decoded
-                ):
-                    raise ModifiesHeaderFiles(
-                        f"Patch modifies a C header file on {rev}: {error}"
-                    )
-                if "this patch modifies a file that is not a c file" in decoded:
-                    raise DoesNotModifyCSource(
-                        f"Patch does not modify a C source file on {rev}: {error}"
-                    )
-            except UnicodeError as _:
-                pass
-        raise PatchlensError(
-            f"Error processing commit {rev}: {error}\nSTDOUT: {error.stdout}\nSTDERR: {error.stderr}"
-        )
+    flag, patchlens_time_ms = run_patchlens(
+        patchlens_executable, expand_building_flags_with, repo_path, patch_file, rev
+    )
+    return (flag, patchlens_time_ms, checkout_time_ms)
 
 
 def get_patchlens_version(patchlens_executable):
