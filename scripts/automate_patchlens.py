@@ -20,13 +20,6 @@ from typing import List, Literal, Optional, Tuple
 import requests
 from simplifier import ExpressionSimplifier
 
-# Patches of the `git-kernel` source are downloaded by commit hash from the stable tree,
-# which contains both mainline commits and stable backports.
-GIT_KERNEL_PATCH_URL = "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/patch/?id={commit}"
-
-# git.kernel.org rejects the default `python-requests` User-Agent (403 Forbidden)
-USER_AGENT = "patchlens-scripts (https://github.com/fleap-dev/patchlens)"
-
 
 @dataclass
 class PatchRow:
@@ -188,11 +181,28 @@ def get_patches(db: sqlite3.Connection, product: str) -> list[PatchRow]:
 
 
 def download_patch(url: str, output_path: str) -> str:
-    response = requests.get(url, headers={"User-Agent": USER_AGENT})
+    response = requests.get(url)
     if response.status_code != 200:
         raise ValueError(f"Failed to download patch from {url}")
     with open(output_path, "wb") as f:
         f.write(response.content)
+    return output_path
+
+
+# Writes the patch of a commit in the local clone, in the mail format `analyze-git` expects.
+def format_patch(repo_path: str, rev: str, output_path: str) -> str:
+    # `<rev>^!` limits the output to `rev` itself. With `-1 <rev>`, a merge commit would
+    # yield the patch of an unrelated commit, because `format-patch` skips merges.
+    patch = subprocess.run(
+        ["git", "format-patch", "--stdout", f"{rev}^!"],
+        cwd=repo_path,
+        check=True,
+        stdout=subprocess.PIPE,
+    ).stdout
+    if not patch:
+        raise CheckoutError(f"Commit {rev} has no patch (merge or empty commit)")
+    with open(output_path, "wb") as f:
+        f.write(patch)
     return output_path
 
 
@@ -228,7 +238,8 @@ def process_patch(
         )
     elif patch_info.source == "git-kernel":
         # Most git.kernel.org refs point to stable backports (`/stable/c/<hash>`), which are
-        # missing from mainline clones. Fail early instead of downloading a patch we can't check out.
+        # missing from mainline clones and can't be checked out. The rest are in the clone,
+        # so their patch comes from `git format-patch` instead of a download.
         if not commit_exists(repo_path, patch_info.patch_id):
             raise CheckoutError(
                 f"Commit {patch_info.patch_id} not found in the repository"
@@ -236,8 +247,9 @@ def process_patch(
         git_kernel_patches_folder = os.path.join(patches_folder, "git-kernel")
         if not os.path.isdir(git_kernel_patches_folder):
             os.makedirs(git_kernel_patches_folder)
-        patch_file = download_patch(
-            GIT_KERNEL_PATCH_URL.format(commit=patch_info.patch_id),
+        patch_file = format_patch(
+            repo_path,
+            patch_info.patch_id,
             os.path.join(git_kernel_patches_folder, patch_info.patch_id + ".txt"),
         )
     else:

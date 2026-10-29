@@ -93,7 +93,7 @@ To generate the Patch dataset, automate patchlens and analyze the results, do:
 # NOTE: The `linux/linux_kernel` parameter is used to filter patches to match this vendor/product.
 # NOTE: The `./data/patchlens-repos/linux/` should point to the path to the Git repository of the target system.
 # NOTE: The `-E linux` parameter specifies which type of build-system analysis to be used. In this case, analyze Linux kbuild files.
-# NOTE: Patches from `git-kernel` whose commit is not in the repository (e.g., stable backports in a mainline clone) are recorded as `CheckoutError`.
+# NOTE: Patches from `git-kernel` are generated from the repository with `git format-patch`. Those whose commit is not in the repository (e.g., stable backports in a mainline clone) are recorded as `CheckoutError`.
 ```
 
 ## Soundness tests
