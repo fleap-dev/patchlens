@@ -62,6 +62,7 @@ The `scripts/` directory contains various helper scripts used for the research p
 *   `make_dataset.py`: Script to generate the patch dataset.
 *   `automate_patchlens.py`: Automates running PatchLens over the entire dataset.
 *   `dataset_stats.py`: Computes statistics on the CVE dataset (before Patchlens automation).
+*   `linux_dashboard.py`: Builds `data/linux-dashboard.html`, a self-contained dashboard of a PatchLens run over the Linux CVEs, filterable by patch source.
 *   `dataset.py`: Dataset management and more complex analysis:
     - List, manage and import runs (automated Patchlens executions over the dataset);
     - Analyze the complexity of VICs;

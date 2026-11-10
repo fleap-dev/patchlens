@@ -1,0 +1,965 @@
+<!doctype html>
+<!-- Template for scripts/linux_dashboard.py, which fills the "data" script tag with the run's rows. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PatchLens on Linux CVEs</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --axis: #c3c2b7;
+  --border: rgba(11, 11, 11, 0.10);
+  --wash: rgba(11, 11, 11, 0.04);
+  --s1: #2a78d6;
+  --s2: #eb6834;
+  --s3: #1baf7a;
+  --s4: #eda100;
+  --s5: #e87ba4;
+  --s7: #6250d6;
+  --gray: #b9b8b0;
+  --on-gray: #0b0b0b;
+  --critical: #d03b3b;
+  --warning: #fab219;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #f0efec;
+    --ink-2: #c3c2b7;
+    --muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --wash: rgba(255, 255, 255, 0.05);
+    --s1: #3987e5;
+    --s2: #d95926;
+    --s3: #199e70;
+    --s4: #c98500;
+    --s5: #d55181;
+    --s7: #9085e9;
+    --gray: #5f5e59;
+    --on-gray: #ffffff;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font-size: 14px; line-height: 1.45; }
+main { max-width: 1240px; margin: 0 auto; padding: 0 24px 56px; }
+a { color: var(--s1); }
+code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+code { background: var(--wash); padding: 1px 4px; border-radius: 4px; }
+header.top { padding: 28px 0 8px; }
+h1 { font-size: 22px; font-weight: 600; margin: 0 0 4px; }
+.meta { color: var(--ink-2); font-size: 13px; margin: 0; }
+.filters {
+  position: sticky; top: 0; z-index: 5; background: var(--page);
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  padding: 12px 0; margin-bottom: 16px; border-bottom: 1px solid var(--grid);
+}
+.filters .group-label { color: var(--ink-2); font-size: 13px; margin-right: 2px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--surface);
+  cursor: pointer; font-size: 13px; user-select: none;
+}
+.chip:hover { background: var(--wash); }
+.chip input { margin: 0; accent-color: var(--s1); }
+.chip .n { color: var(--muted); font-variant-numeric: tabular-nums; }
+.divider { width: 1px; height: 20px; background: var(--grid); margin: 0 6px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 16px; align-items: start; }
+.wide { grid-column: 1 / -1; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; min-width: 0; }
+.card h2 { font-size: 15px; font-weight: 600; margin: 0; }
+.card .sub { color: var(--ink-2); font-size: 13px; margin: 3px 0 12px; max-width: 80ch; }
+.card-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.toggle, .button {
+  font: inherit; font-size: 12px; color: var(--ink-2); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; cursor: pointer; white-space: nowrap;
+}
+.toggle:hover, .button:hover { background: var(--wash); }
+.summary { display: grid; grid-template-columns: 1.4fr repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.tile .label { color: var(--ink-2); font-size: 13px; }
+.tile .value { font-size: 26px; font-weight: 600; line-height: 1.2; margin-top: 2px; }
+.tile .detail { color: var(--ink-2); font-size: 12px; margin-top: 4px; }
+.tile.hero { grid-row: span 2; display: flex; flex-direction: column; justify-content: center; }
+.tile.hero .value { font-size: 52px; line-height: 1.05; }
+.attention { list-style: none; margin: 0; padding: 0; }
+.attention li { display: grid; grid-template-columns: 70px 1fr; gap: 12px; align-items: start; padding: 10px 0; border-top: 1px solid var(--grid); }
+.attention li:first-child { border-top: none; padding-top: 2px; }
+.attention .action { margin-left: 8px; }
+.level { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--ink-2); padding-top: 1px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--ink-2); margin-bottom: 10px; }
+.legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.stats { display: flex; flex-wrap: wrap; gap: 4px 20px; font-size: 13px; color: var(--ink-2); margin-top: 10px; }
+.stats strong { color: var(--ink); font-weight: 600; }
+.shapes { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 10px; }
+.shapes .tile { padding: 10px 12px; }
+.shapes .tile .value { font-size: 22px; }
+svg { display: block; overflow: visible; }
+svg text { font-family: inherit; }
+.t-label { fill: var(--ink-2); font-size: 12px; }
+.t-value { fill: var(--ink); font-size: 12px; font-variant-numeric: tabular-nums; }
+.t-inside { font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; pointer-events: none; }
+.t-axis { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.gridline { stroke: var(--grid); stroke-width: 1; shape-rendering: crispEdges; }
+.baseline { stroke: var(--axis); stroke-width: 1; shape-rendering: crispEdges; }
+.hit { fill: transparent; outline: none; }
+.hit:focus-visible { stroke: var(--ink-2); stroke-width: 1; }
+.mark.lift { filter: brightness(1.15); }
+#tip {
+  position: fixed; z-index: 20; pointer-events: none; background: var(--surface);
+  border: 1px solid var(--border); box-shadow: 0 4px 18px rgba(0, 0, 0, 0.14); border-radius: 8px;
+  padding: 8px 10px; font-size: 12px; min-width: 140px; max-width: 340px;
+}
+.tip-title { color: var(--ink-2); margin-bottom: 4px; }
+.tip-row { display: flex; align-items: center; gap: 8px; line-height: 1.6; }
+.tip-key { width: 12px; height: 2px; border-radius: 1px; flex: none; }
+.tip-row strong { font-variant-numeric: tabular-nums; }
+.tip-row .l { color: var(--ink-2); }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+th { color: var(--ink-2); font-weight: 600; white-space: nowrap; }
+.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.nowrap { white-space: nowrap; }
+.result { min-width: 15em; }
+.explorer-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+select, input[type="search"] {
+  font: inherit; font-size: 13px; padding: 5px 8px; color: var(--ink);
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface);
+}
+input[type="search"] { flex: 1; min-width: 240px; }
+.clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-all; cursor: pointer; }
+.clamp.open { display: block; }
+.count-line { color: var(--ink-2); font-size: 13px; margin: 10px 0 0; display: flex; gap: 12px; align-items: center; }
+.empty { color: var(--ink-2); padding: 24px 0; text-align: center; }
+.notes { color: var(--ink-2); font-size: 13px; }
+.notes p { margin: 0 0 8px; max-width: 95ch; }
+@media (max-width: 720px) {
+  main { padding: 0 14px 40px; }
+  .grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 900px) {
+  .summary { grid-template-columns: repeat(2, 1fr); }
+  .tile.hero { grid-column: 1 / -1; grid-row: auto; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header class="top">
+    <h1>PatchLens on Linux CVEs</h1>
+    <p class="meta" id="meta"></p>
+  </header>
+
+  <div class="filters" id="filters">
+    <span class="group-label">Sources</span>
+    <span id="source-chips" style="display: contents"></span>
+    <span class="divider"></span>
+    <label class="chip"><input type="checkbox" id="hide-backports"> Hide likely stable backports</label>
+  </div>
+
+  <section class="summary" id="summary" aria-label="Summary"></section>
+
+  <div class="grid" id="grid">
+    <section class="card wide" aria-labelledby="attention-title">
+      <div class="card-head"><h2 id="attention-title">Needs our attention</h2></div>
+      <p class="sub">Counts follow the source filter. Most urgent first.</p>
+      <ul class="attention" id="attention"></ul>
+    </section>
+  </div>
+
+  <section class="card wide" id="explorer" style="margin-top: 16px" aria-labelledby="explorer-title">
+    <div class="card-head"><h2 id="explorer-title">Patch explorer</h2></div>
+    <p class="sub">Patches in the selection. It leaves out likely backports unless you pick All results. Search matches CVE IDs, commits, VICs and error messages. Click a long VIC or error to expand it.</p>
+    <div class="explorer-controls">
+      <select id="explorer-cause" aria-label="Result"></select>
+      <input type="search" id="explorer-search" placeholder="Search, like CONFIG_BT or CVE-2024-26" aria-label="Search patches">
+    </div>
+    <div class="table-wrap" id="explorer-table"></div>
+    <p class="count-line" id="explorer-count"></p>
+  </section>
+
+  <section class="card wide notes" style="margin-top: 16px" aria-labelledby="notes-title">
+    <div class="card-head"><h2 id="notes-title">How to read this</h2></div>
+    <p>Each row of the run is one patch, a fix commit linked to a CVE. A patch has a <strong>VIC</strong> when PatchLens returned a configuration condition for it.</p>
+    <p><strong>Likely stable backport.</strong> The commit isn't in the mainline clone, but another commit of the same CVE is. Kernel CVE records list the mainline fix plus one commit per stable branch, so these are copies of a fix the run already analyzed. This is inferred from the CVE records. We haven't checked it against linux-stable.</p>
+    <p><strong>Kbuild walk.</strong> PatchLens maps each patched file to Kconfig options by walking up the directories and reading each Makefile or Kbuild. We reran two failing samples on a full checkout and got the same error, so these failures come from PatchLens and not from the minimal tree the automation writes.</p>
+    <p><strong>Options per VIC</strong> counts the distinct names inside <code>defined(…)</code> and <code>$(…)</code>. <code>ARCH</code> counts as an option.</p>
+    <p><strong>Times.</strong> The <code>time_processing_ms</code> and <code>checkout_time_ms</code> columns hold seconds, not milliseconds. This page converts them. Only successful patches have times.</p>
+    <p>CVE years come from the CVE ID. Rebuild this page with <code>scripts/linux_dashboard.py</code>.</p>
+  </section>
+</main>
+<div id="tip" hidden></div>
+
+<script type="application/json" id="data">__DATA__</script>
+<script>
+'use strict';
+const D = JSON.parse(document.getElementById('data').textContent);
+const R = D.rows;
+const N = R.cause.length;
+const NCVE = D.cves.id.length;
+
+// Outcomes keep the same color in every chart. Ink is the text color inside a fill.
+const OUTCOMES = [
+  {key: 'ok', label: 'VIC computed', color: 'var(--s1)', ink: '#ffffff'},
+  {key: 'patchlens', label: 'PatchLens error', color: 'var(--s2)', ink: '#ffffff'},
+  {key: 'not_c', label: 'No C source change', color: 'var(--s3)', ink: '#ffffff'},
+  {key: 'checkout', label: 'Checkout error', color: 'var(--s4)', ink: '#0b0b0b'},
+  {key: 'backport', label: 'Likely stable backport', color: 'var(--gray)', ink: 'var(--on-gray)'},
+];
+const O = Object.fromEntries(OUTCOMES.map((o, i) => [o.key, i]));
+const COVERAGE = [
+  {label: 'Has a VIC', color: 'var(--s1)', ink: '#ffffff'},
+  {label: 'Patches, no VIC', color: 'var(--s5)', ink: '#ffffff'},
+  {label: 'No patch', color: 'var(--s7)', ink: '#ffffff'},
+];
+const SEVERITY_LABELS = {CRITICAL: 'Critical', HIGH: 'High', MEDIUM: 'Medium', LOW: 'Low', UNKNOWN: 'Unknown'};
+const C = Object.fromEntries(D.causes.map((c, i) => [c.key, i]));
+const causeOutcome = D.causes.map(c => O[c.outcome]);
+const YEARS = [...new Set(D.cves.year)].sort((a, b) => a - b);
+
+const state = {sources: new Set(D.sources.map((_, i) => i)), hideBackports: false};
+// The explorer's cause is a cause index, 'all', or 'analyzed' for all but likely backports.
+const PAGE = 25;
+const explorer = {cause: 'analyzed', query: '', limit: PAGE};
+let A = null;
+
+// ---------- formatting ----------
+const nf = new Intl.NumberFormat('en-US');
+const fmt = n => nf.format(n);
+const pct = (a, b) => (b ? `${(100 * a / b).toFixed(a === 0 || a === b ? 0 : 1)}%` : 'n/a');
+const ms = v => (v >= 100 ? `${Math.round(v)} ms` : `${v.toFixed(1)} ms`);
+function compact(n) {
+  if (n < 1000) return String(n);
+  const k = n / 1000;
+  return `${k >= 10 ? Math.round(k) : Math.round(k * 10) / 10}K`;
+}
+function quantile(sorted, q) {
+  if (!sorted.length) return 0;
+  return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
+}
+const sum = values => values.reduce((a, b) => a + b, 0);
+
+// ---------- DOM helpers ----------
+function h(tag, props = {}, ...children) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === 'text') e.textContent = v;
+    else if (k === 'class') e.className = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v);
+  }
+  for (const child of children) if (child != null) e.append(child);
+  return e;
+}
+function s(tag, attrs, parent) {
+  const e = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'text') e.textContent = v;
+    else e.setAttribute(k, v);
+  }
+  parent.append(e);
+  return e;
+}
+// Text with `backticks` rendered as code.
+function rich(text) {
+  const frag = document.createDocumentFragment();
+  text.split('`').forEach((part, i) => frag.append(i % 2 ? h('code', {text: part}) : part));
+  return frag;
+}
+// Shortens an SVG text element with an ellipsis until it fits in `width`.
+function fitText(el, width) {
+  let text = el.textContent;
+  while (text.length > 4 && el.getComputedTextLength() > width) {
+    text = text.slice(0, -2);
+    el.textContent = `${text}…`;
+  }
+}
+function legend(items) {
+  return h('div', {class: 'legend'}, ...items.map(item => {
+    const swatch = h('span', {class: 'sw'});
+    swatch.style.background = item.color;
+    return h('span', {}, swatch, item.label);
+  }));
+}
+function table(columns, rows) {
+  return h('div', {class: 'table-wrap'}, h('table', {},
+    h('thead', {}, h('tr', {}, ...columns.map(c => h('th', {class: c.num ? 'num' : c.class ?? '', text: c.label})))),
+    h('tbody', {}, ...rows.map(row => h('tr', {}, ...row.map((value, i) => {
+      const cell = h('td', {class: columns[i].num ? 'num' : columns[i].class ?? ''});
+      cell.append(typeof value === 'number' ? fmt(value) : value);
+      return cell;
+    }))))));
+}
+
+// ---------- tooltip ----------
+const tip = document.getElementById('tip');
+function showTip(x, y, title, rows) {
+  tip.replaceChildren();
+  if (title) tip.append(h('div', {class: 'tip-title', text: title}));
+  for (const row of rows) {
+    const key = h('span', {class: 'tip-key'});
+    if (row.color) key.style.background = row.color;
+    else key.style.visibility = 'hidden';
+    tip.append(h('div', {class: 'tip-row'}, key, h('strong', {text: row.value}), h('span', {class: 'l', text: row.label})));
+  }
+  tip.hidden = false;
+  const box = tip.getBoundingClientRect();
+  let left = x + 14, top = y + 14;
+  if (left + box.width > innerWidth - 8) left = x - box.width - 14;
+  if (top + box.height > innerHeight - 8) top = y - box.height - 14;
+  tip.style.left = `${Math.max(8, left)}px`;
+  tip.style.top = `${Math.max(8, top)}px`;
+}
+function hideTip() { tip.hidden = true; }
+// Makes `target` show the tooltip from `content()` on hover and keyboard focus.
+function hoverable(target, marks, content) {
+  target.setAttribute('tabindex', '0');
+  target.classList.add('hit');
+  const lift = on => marks.forEach(m => m.classList.toggle('lift', on));
+  target.addEventListener('pointermove', e => { lift(true); showTip(e.clientX, e.clientY, ...content()); });
+  target.addEventListener('pointerleave', () => { lift(false); hideTip(); });
+  target.addEventListener('focus', () => {
+    lift(true);
+    const b = target.getBoundingClientRect();
+    showTip(b.left + b.width / 2, b.top + b.height / 2, ...content());
+  });
+  target.addEventListener('blur', () => { lift(false); hideTip(); });
+}
+
+// ---------- chart primitives ----------
+// A horizontal bar from the baseline at x, rounded only at its data end.
+function hBarPath(x, y, w, hh, r) {
+  r = Math.min(r, w, hh / 2);
+  return `M${x},${y}H${x + w - r}A${r},${r} 0 0 1 ${x + w},${y + r}V${y + hh - r}A${r},${r} 0 0 1 ${x + w - r},${y + hh}H${x}Z`;
+}
+// A column rising from the baseline at y0, rounded only at its top.
+function vBarPath(x, y0, w, hh, r) {
+  r = Math.min(r, hh, w / 2);
+  const top = y0 - hh;
+  return `M${x},${y0}V${top + r}A${r},${r} 0 0 1 ${x + r},${top}H${x + w - r}A${r},${r} 0 0 1 ${x + w},${top + r}V${y0}Z`;
+}
+function niceStep(max, count = 4) {
+  const raw = max / count, power = 10 ** Math.floor(Math.log10(raw));
+  return [1, 2, 2.5, 5, 10].map(m => m * power).find(step => step >= raw);
+}
+function newSvg(box, width, height, label) {
+  const el = s('svg', {width, height, viewBox: `0 0 ${width} ${height}`, role: 'img', 'aria-label': label}, box);
+  return el;
+}
+
+// 100% stacked horizontal bars, one per row. rows: [{label, values}], cats: [{label, color, ink}].
+function hStack100(box, rows, cats, unit, label) {
+  const width = box.clientWidth;
+  const labelW = Math.min(118, width * 0.28), noteW = 108;
+  const plotW = Math.max(60, width - labelW - noteW - 8);
+  const barH = 22, rowH = 38;
+  const svg = newSvg(box, width, rows.length * rowH, label);
+  rows.forEach((row, ri) => {
+    const y = ri * rowH + (rowH - barH) / 2;
+    const total = sum(row.values);
+    fitText(s('text', {x: 0, y: y + barH / 2, 'dominant-baseline': 'central', class: 't-label', text: row.label}, svg), labelW - 8);
+    s('text', {x: width, y: y + barH / 2, 'dominant-baseline': 'central', 'text-anchor': 'end', class: 't-value', text: `${fmt(total)} ${unit}`}, svg);
+    if (!total) return;
+    const shown = row.values.map((_, ci) => ci).filter(ci => row.values[ci] > 0);
+    let x = labelW;
+    shown.forEach((ci, k) => {
+      const value = row.values[ci], w = plotW * value / total, last = k === shown.length - 1;
+      const drawW = last ? w : Math.max(0.5, w - 2);
+      const d = last ? hBarPath(x, y, drawW, barH, 4) : `M${x},${y}h${drawW}v${barH}h${-drawW}Z`;
+      const mark = s('path', {d, class: 'mark', style: `fill:${cats[ci].color}`}, svg);
+      const text = s('text', {
+        x: x + drawW / 2, y: y + barH / 2, 'dominant-baseline': 'central', 'text-anchor': 'middle',
+        class: 't-inside', style: `fill:${cats[ci].ink}`, text: pct(value, total),
+      }, svg);
+      if (text.getComputedTextLength() + 12 > drawW) text.remove();
+      const hit = s('rect', {x, y: y - 6, width: Math.max(w, 6), height: barH + 12}, svg);
+      hoverable(hit, [mark], () => [row.label, [{value: fmt(value), label: `${cats[ci].label} · ${pct(value, total)}`, color: cats[ci].color}]]);
+      x += w;
+    });
+  });
+}
+
+// Horizontal bars, labeled on the left when the box is wide and above each bar when it's
+// narrow. items: [{label, value, color, note}].
+function hBars(box, items, label, onSelect) {
+  const width = box.clientWidth, side = width >= 640, barH = 14;
+  const rowH = side ? 28 : 40, barY = side ? (rowH - barH) / 2 : 18;
+  const svg = newSvg(box, width, items.length * rowH, label);
+  let labelW = 0;
+  if (side) {
+    const probe = s('text', {class: 't-label'}, svg);
+    for (const item of items) {
+      probe.textContent = item.label;
+      labelW = Math.max(labelW, probe.getComputedTextLength());
+    }
+    probe.remove();
+    labelW = Math.min(labelW + 16, width * 0.45);
+  }
+  const plotW = Math.max(60, width - labelW - 72);
+  const max = Math.max(1, ...items.map(item => item.value));
+  items.forEach((item, i) => {
+    const y = i * rowH;
+    const text = side
+      ? s('text', {x: 0, y: y + rowH / 2, 'dominant-baseline': 'central', class: 't-label', text: item.label}, svg)
+      : s('text', {x: 0, y: y + 12, class: 't-label', text: item.label}, svg);
+    fitText(text, side ? labelW - 12 : width);
+    const w = Math.max(2, plotW * item.value / max);
+    const mark = s('path', {d: hBarPath(labelW, y + barY, w, barH, 4), class: 'mark', style: `fill:${item.color}`}, svg);
+    s('text', {x: labelW + w + 6, y: y + barY + barH / 2, 'dominant-baseline': 'central', class: 't-value', text: fmt(item.value)}, svg);
+    const hit = s('rect', {x: 0, y, width, height: rowH}, svg);
+    hoverable(hit, [mark], () => [item.label, [{value: fmt(item.value), label: item.note, color: item.color}]]);
+    if (onSelect) {
+      hit.style.cursor = 'pointer';
+      hit.addEventListener('click', () => onSelect(item));
+      hit.addEventListener('keydown', e => { if (e.key === 'Enter') onSelect(item); });
+    }
+  });
+}
+
+// Stacked columns. values[x][cat]. With capLabels, each column shows its total and the
+// y-axis is dropped.
+function vColumns(box, xs, cats, values, {capLabels = false, label = '', tipTitle = x => String(x)} = {}) {
+  const width = box.clientWidth;
+  const plotH = 200, top = capLabels ? 22 : 10, axisH = 26, left = capLabels ? 0 : 36;
+  const totals = values.map(sum);
+  const maxTotal = Math.max(1, ...totals);
+  const step = niceStep(maxTotal);
+  const yMax = capLabels ? maxTotal : Math.ceil(maxTotal / step) * step;
+  const svg = newSvg(box, width, top + plotH + axisH, label);
+  const y0 = top + plotH, plotW = width - left;
+  const band = plotW / xs.length, colW = Math.min(24, band * 0.7);
+  if (!capLabels) {
+    for (let t = 0; t <= yMax + 1e-9; t += step) {
+      const y = y0 - plotH * t / yMax;
+      if (t) s('line', {x1: left, x2: width, y1: y, y2: y, class: 'gridline'}, svg);
+      s('text', {x: left - 8, y, 'text-anchor': 'end', 'dominant-baseline': 'central', class: 't-axis', text: compact(t)}, svg);
+    }
+  }
+  s('line', {x1: left, x2: width, y1: y0, y2: y0, class: 'baseline'}, svg);
+  const probe = s('text', {class: 't-axis', text: xs.reduce((a, b) => (String(b).length > String(a).length ? b : a))}, svg);
+  const labelStep = [1, 2, 5, 10].find(k => k * band >= probe.getComputedTextLength() + 8) ?? 10;
+  probe.remove();
+  xs.forEach((x, i) => {
+    const cx = left + band * i + band / 2;
+    if ((xs.length - 1 - i) % labelStep === 0) {
+      s('text', {x: cx, y: y0 + 17, 'text-anchor': 'middle', class: 't-axis', text: x}, svg);
+    }
+    const shown = values[i].map((_, ci) => ci).filter(ci => values[i][ci] > 0);
+    const marks = [];
+    let below = 0;
+    shown.forEach((ci, k) => {
+      const value = values[i][ci], last = k === shown.length - 1;
+      const hh = plotH * value / yMax, base = y0 - plotH * below / yMax;
+      const drawH = last ? hh : Math.max(0.5, hh - 2);
+      const d = last ? vBarPath(cx - colW / 2, base, colW, drawH, 4) : `M${cx - colW / 2},${base}v${-drawH}h${colW}v${drawH}Z`;
+      marks.push(s('path', {d, class: 'mark', style: `fill:${cats[ci].color}`}, svg));
+      below += value;
+    });
+    if (capLabels && totals[i]) {
+      s('text', {x: cx, y: y0 - plotH * totals[i] / yMax - 7, 'text-anchor': 'middle', class: 't-value', text: fmt(totals[i])}, svg);
+    }
+    const hit = s('rect', {x: left + band * i, y: top - 12, width: band, height: plotH + 12 + axisH}, svg);
+    hoverable(hit, marks, () => {
+      const rows = cats.map((c, ci) => ({value: fmt(values[i][ci]), label: c.label, color: cats.length > 1 ? c.color : null}));
+      if (cats.length > 1) rows.push({value: fmt(totals[i]), label: 'Total'});
+      return [tipTitle(x), rows];
+    });
+  });
+}
+
+// ---------- aggregation ----------
+const TIME_BUCKETS = [[0, 10, '<10'], [10, 15, '10-15'], [15, 20, '15-20'], [20, 30, '20-30'], [30, 50, '30-50'], [50, Infinity, '50+']];
+const OPTION_BUCKETS = [[0, 0, '0'], [1, 1, '1'], [2, 2, '2'], [3, 3, '3'], [4, 4, '4'], [5, 5, '5'], [6, 9, '6-9'], [10, Infinity, '10+']];
+
+function compute() {
+  const a = {
+    rows: [], hiddenBackports: 0,
+    outcome: OUTCOMES.map(() => 0), cause: D.causes.map(() => 0),
+    bySource: D.sources.map(() => OUTCOMES.map(() => 0)),
+    cveMask: new Uint8Array(NCVE), plTimes: [], treeTimes: [],
+    optionCounts: D.options.map(() => 0), optionsPerVic: OPTION_BUCKETS.map(() => 0),
+    shape: {always: 0, single: 0, and: 0, or: 0, arch: 0},
+  };
+  for (let i = 0; i < N; i++) {
+    const src = R.src[i];
+    if (!state.sources.has(src)) continue;
+    const cause = R.cause[i], o = causeOutcome[cause];
+    if (o === O.backport && state.hideBackports) { a.hiddenBackports++; continue; }
+    a.rows.push(i);
+    a.outcome[o]++;
+    a.cause[cause]++;
+    a.bySource[src][o]++;
+    a.cveMask[R.cve[i]] |= 1 << o;
+    if (o !== O.ok) continue;
+    a.plTimes.push(R.t[i]);
+    a.treeTimes.push(R.tree[i]);
+    const opts = R.opts[i];
+    for (const k of opts) a.optionCounts[k]++;
+    a.optionsPerVic[OPTION_BUCKETS.findIndex(([lo, hi]) => opts.length >= lo && opts.length <= hi)]++;
+    const vic = R.detail[i];
+    if (vic === 'True') a.shape.always++;
+    else if (vic.includes('|')) a.shape.or++;
+    else if (vic.includes('&')) a.shape.and++;
+    else a.shape.single++;
+    if (vic.includes('$(ARCH)')) a.shape.arch++;
+  }
+  a.plTimes.sort((x, y) => x - y);
+  a.treeTimes.sort((x, y) => x - y);
+
+  // A CVE has a VIC if any selected patch has one, else "patches, no VIC" if it has any
+  // selected patch, else "no patch".
+  a.coverage = [0, 0, 0];
+  a.byYear = YEARS.map(() => [0, 0, 0]);
+  a.bySeverity = D.severities.map(() => [0, 0, 0]);
+  a.noVic = {patchlens: 0, not_c: 0, missing: 0};
+  for (let j = 0; j < NCVE; j++) {
+    const m = a.cveMask[j];
+    const cat = m & (1 << O.ok) ? 0 : m ? 1 : 2;
+    a.coverage[cat]++;
+    a.byYear[YEARS.indexOf(D.cves.year[j])][cat]++;
+    a.bySeverity[D.cves.sev[j]][cat]++;
+    if (cat !== 1) continue;
+    if (m & (1 << O.patchlens)) a.noVic.patchlens++;
+    else if (m & (1 << O.not_c)) a.noVic.not_c++;
+    else a.noVic.missing++;
+  }
+  a.cvesWithPatch = a.coverage[0] + a.coverage[1];
+  return a;
+}
+
+// ---------- header, filters, summary ----------
+function renderMeta() {
+  const run = D.run;
+  document.getElementById('meta').textContent =
+    `Run started ${run.startedAt.replace('T', ' ').slice(0, 16)} · PatchLens ${run.patchlensVersion} · ` +
+    `Linux clone at ${run.cloneHead} · page built ${run.generatedAt.replace('T', ' ')}`;
+  const totals = D.sources.map(() => 0);
+  for (let i = 0; i < N; i++) totals[R.src[i]]++;
+  const chips = document.getElementById('source-chips');
+  D.sources.forEach((name, i) => {
+    const input = h('input', {type: 'checkbox'});
+    input.checked = true;
+    input.addEventListener('change', () => {
+      if (!input.checked && state.sources.size === 1) { input.checked = true; return; }
+      if (input.checked) state.sources.add(i); else state.sources.delete(i);
+      render();
+    });
+    chips.append(h('label', {class: 'chip'}, input, name, h('span', {class: 'n', text: fmt(totals[i])})));
+  });
+  const hide = document.getElementById('hide-backports');
+  hide.addEventListener('change', () => { state.hideBackports = hide.checked; render(); });
+}
+function setHideBackports(on) {
+  state.hideBackports = on;
+  document.getElementById('hide-backports').checked = on;
+  render();
+}
+
+function tile(label, value, detail, extraClass = '') {
+  return h('div', {class: `tile ${extraClass}`}, h('div', {class: 'label', text: label}), h('div', {class: 'value', text: value}), h('div', {class: 'detail', text: detail}));
+}
+function renderSummary() {
+  const rows = A.rows.length, backports = A.outcome[O.backport];
+  const analyzed = rows - backports;
+  const vic = A.coverage[0];
+  document.getElementById('summary').replaceChildren(
+    tile('Linux CVEs with a VIC', pct(vic, NCVE), `${fmt(vic)} of ${fmt(NCVE)} CVEs · ${pct(vic, A.cvesWithPatch)} of the CVEs that have a patch`, 'hero'),
+    tile('Patches', fmt(rows), `From ${fmt(A.cvesWithPatch)} CVEs. ${fmt(analyzed)} once likely backports are left out.`),
+    tile('VICs computed', fmt(A.outcome[O.ok]), `${pct(A.outcome[O.ok], analyzed)} of patches without likely backports`),
+    tile('PatchLens errors', fmt(A.outcome[O.patchlens]), `${pct(A.outcome[O.patchlens], analyzed)} of patches without likely backports`),
+    tile('No C source change', fmt(A.outcome[O.not_c]), `${pct(A.outcome[O.not_c], analyzed)} of patches without likely backports`),
+    tile('Checkout errors', fmt(A.outcome[O.checkout]),
+      state.hideBackports ? `${fmt(A.hiddenBackports)} likely backports hidden` : `plus ${fmt(backports)} likely stable backports`),
+    tile('Median PatchLens time', A.plTimes.length ? ms(quantile(A.plTimes, 0.5)) : 'n/a',
+      A.plTimes.length ? `95th percentile ${ms(quantile(A.plTimes, 0.95))} · slowest ${ms(A.plTimes[A.plTimes.length - 1])}` : ''),
+  );
+}
+
+// ---------- attention ----------
+const LEVELS = {
+  fix: {label: 'Fix', color: 'var(--critical)', shape: 'circle'},
+  check: {label: 'Check', color: 'var(--warning)', shape: 'triangle'},
+  note: {label: 'Note', color: 'var(--muted)', shape: 'ring'},
+};
+function levelIcon(level) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('width', 14);
+  svg.setAttribute('height', 14);
+  svg.setAttribute('aria-hidden', 'true');
+  const {color, shape} = LEVELS[level];
+  if (shape === 'circle') {
+    s('circle', {cx: 7, cy: 7, r: 6, style: `fill:${color}`}, svg);
+    s('rect', {x: 6.1, y: 3.2, width: 1.8, height: 4.8, rx: 0.9, fill: '#ffffff'}, svg);
+    s('circle', {cx: 7, cy: 10.2, r: 1, fill: '#ffffff'}, svg);
+  } else if (shape === 'triangle') {
+    s('path', {d: 'M7 1.2 13.2 12.6H0.8Z', style: `fill:${color}`}, svg);
+    s('rect', {x: 6.2, y: 5, width: 1.6, height: 4, rx: 0.8, fill: '#0b0b0b'}, svg);
+    s('circle', {cx: 7, cy: 10.8, r: 0.9, fill: '#0b0b0b'}, svg);
+  } else {
+    s('circle', {cx: 7, cy: 7, r: 5.5, style: `fill:none;stroke:${color};stroke-width:1.5`}, svg);
+    s('rect', {x: 6.25, y: 6, width: 1.5, height: 4.2, rx: 0.75, style: `fill:${color}`}, svg);
+    s('circle', {cx: 7, cy: 4.2, r: 0.9, style: `fill:${color}`}, svg);
+  }
+  return svg;
+}
+function attentionItems() {
+  const c = A.cause, items = [];
+  const total = A.rows.length;
+  const walk = c[C.no_makefile_own_dir] + c[C.no_makefile_ancestor] + c[C.obj_not_found];
+  if (walk) items.push({level: 'fix', text:
+    `${fmt(walk)} patches fail in the Kbuild walk, which links a patched file to its Kconfig options. ` +
+    `${fmt(c[C.no_makefile_own_dir])} sit in a directory with no Makefile or Kbuild, ${fmt(c[C.no_makefile_ancestor])} have a parent directory without one, ` +
+    `like \`drivers/hwtracing/\`, which \`drivers/Makefile\` skips by listing \`hwtracing/intel_th/\` directly, ` +
+    `and ${fmt(c[C.obj_not_found])} aren't listed as an object in their Makefile. This is the largest group of PatchLens errors.`});
+  const parser = c[C.kbuild_else_ifeq] + c[C.kbuild_override] + c[C.kbuild_other];
+  if (parser) items.push({level: 'fix', text:
+    `The Kbuild parser rejects ${fmt(parser)} patches' Makefiles: \`else ifeq\` in ${fmt(c[C.kbuild_else_ifeq])}, ` +
+    `\`override\` in ${fmt(c[C.kbuild_override])}, other syntax like \`undefine\` in ${fmt(c[C.kbuild_other])}.`});
+  const noVic = A.coverage[1];
+  if (noVic) items.push({level: 'check', text:
+    `${fmt(noVic)} CVEs have patches but no VIC, ${pct(noVic, A.cvesWithPatch)} of the CVEs with a patch. ` +
+    `${fmt(A.noVic.patchlens)} have a PatchLens error, ${fmt(A.noVic.not_c)} only change non-C files, ` +
+    `and ${fmt(A.noVic.missing)} only have commits the run couldn't get.`});
+  const backports = A.outcome[O.backport];
+  if (backports) items.push({level: 'check', text:
+    `${fmt(backports)} patches, ${pct(backports, total)} of the selection, are commits missing from the mainline clone in CVEs whose mainline fix is there. ` +
+    `They are almost certainly stable backports of a fix the run already analyzed, so they inflate the failure count.`,
+    action: {label: 'Hide them', run: () => setHideBackports(true)}});
+  else if (A.hiddenBackports) items.push({level: 'note', text:
+    `${fmt(A.hiddenBackports)} likely stable backports are hidden from every number on this page.`,
+    action: {label: 'Show them', run: () => setHideBackports(false)}});
+  const noPatch = A.coverage[2];
+  if (noPatch) items.push({level: 'check', text:
+    `${fmt(noPatch)} Linux CVEs, ${pct(noPatch, NCVE)}, have no patch from the selected sources, so PatchLens never saw them.`});
+  const others = [
+    [c[C.if_operator], '`#if` expression with an operator PatchLens doesn\'t handle', '`#if` expressions with an operator PatchLens doesn\'t handle'],
+    [c[C.patch_apply], 'patch that doesn\'t apply', 'patches that don\'t apply'],
+    [c[C.target_missing] + c[C.patchlens_other], 'other error', 'other errors'],
+  ].filter(([n]) => n).map(([n, one, many]) => `${fmt(n)} ${n === 1 ? one : many}`);
+  if (others.length) items.push({level: 'note', text: `Smaller PatchLens errors: ${others.join(', ')}.`});
+  const checkout = A.outcome[O.checkout];
+  if (checkout) items.push({level: 'note', text:
+    `${fmt(checkout)} checkout errors besides backports: ${fmt(c[C.missing_commit])} commits missing from the clone with no other commit of their CVE in it, ` +
+    `${fmt(c[C.missing_parent])} missing parent revisions, ${fmt(c[C.empty_commit])} merge or empty commits, ${fmt(c[C.unreadable_patch])} unreadable patch files.`});
+  if (A.shape.always) items.push({level: 'note', text:
+    `${fmt(A.shape.always)} VICs are \`True\`, meaning the patched code builds in every configuration. Worth a spot check that these aren't Kbuild walks that stopped early.`});
+  items.push({level: 'note', text:
+    'The `time_processing_ms` and `checkout_time_ms` columns store seconds, not milliseconds. This page converts them, but other scripts reading those columns will be off by 1,000×.'});
+  return items;
+}
+function renderAttention() {
+  document.getElementById('attention').replaceChildren(...attentionItems().map(item => {
+    const text = h('div', {}, rich(item.text));
+    if (item.action) text.append(h('button', {class: 'button action', type: 'button', text: item.action.label, onclick: item.action.run}));
+    return h('li', {}, h('span', {class: 'level'}, levelIcon(item.level), LEVELS[item.level].label), text);
+  }));
+}
+
+// ---------- chart cards ----------
+const cards = [];
+function card({title, sub, wide = false, draw, table: tableOf}) {
+  const body = h('div', {});
+  const subEl = h('p', {class: 'sub'});
+  const button = h('button', {class: 'toggle', type: 'button', text: 'Show table'});
+  const entry = {draw, tableOf, sub, body, subEl, showTable: false};
+  button.addEventListener('click', () => {
+    entry.showTable = !entry.showTable;
+    button.textContent = entry.showTable ? 'Show chart' : 'Show table';
+    renderCard(entry);
+  });
+  document.getElementById('grid').append(h('section', {class: `card${wide ? ' wide' : ''}`},
+    h('div', {class: 'card-head'}, h('h2', {text: title}), button), subEl, body));
+  cards.push(entry);
+}
+function renderCard(entry) {
+  entry.subEl.replaceChildren(rich(typeof entry.sub === 'function' ? entry.sub() : entry.sub));
+  entry.body.replaceChildren();
+  if (entry.showTable) {
+    const {columns, rows} = entry.tableOf();
+    entry.body.append(table(columns, rows));
+  } else {
+    entry.draw(entry.body);
+  }
+}
+
+const shownOutcomes = () => OUTCOMES.map((o, i) => i).filter(i => i !== O.backport || !state.hideBackports);
+const selectedSources = () => D.sources.map((_, i) => i).filter(i => state.sources.has(i));
+
+card({
+  title: 'Result by source', wide: true,
+  sub: 'Share of each source\'s patches by result. Hover a segment for its count.',
+  draw(box) {
+    const outcomes = shownOutcomes();
+    box.append(legend(outcomes.map(i => OUTCOMES[i])));
+    const rows = selectedSources().map(s => ({label: D.sources[s], values: outcomes.map(o => A.bySource[s][o])}));
+    if (rows.length > 1) rows.unshift({label: 'All selected', values: outcomes.map(o => A.outcome[o])});
+    hStack100(box, rows, outcomes.map(i => OUTCOMES[i]), 'patches', 'Result by source');
+  },
+  table() {
+    const outcomes = shownOutcomes();
+    const rows = selectedSources().map(s => {
+      const v = A.bySource[s], total = sum(v);
+      return [D.sources[s], total, ...outcomes.map(o => v[o]), pct(v[O.ok], total - v[O.backport])];
+    });
+    return {
+      columns: [{label: 'Source'}, {label: 'Patches', num: true}, ...outcomes.map(o => ({label: OUTCOMES[o].label, num: true})), {label: 'VIC rate without backports', num: true}],
+      rows,
+    };
+  },
+});
+
+function failureCauses() {
+  return D.causes.map((cause, i) => ({cause: i, ...cause}))
+    .filter(cause => cause.key !== 'ok' && cause.key !== 'likely_backport' && A.cause[cause.cause] > 0)
+    .sort((x, y) => A.cause[y.cause] - A.cause[x.cause]);
+}
+card({
+  title: 'Why patches get no VIC', wide: true,
+  sub: () => {
+    const backports = A.outcome[O.backport];
+    return `Every failure cause except likely stable backports${backports ? `, which would add a bar of ${fmt(backports)}` : ''}. Click a bar to list its patches.`;
+  },
+  draw(box) {
+    const causes = failureCauses();
+    if (!causes.length) { box.append(h('p', {class: 'empty', text: 'No failures in this selection.'})); return; }
+    const failures = sum(causes.map(cause => A.cause[cause.cause]));
+    const outcomes = [...new Set(causes.map(cause => causeOutcome[cause.cause]))].sort();
+    box.append(legend(outcomes.map(o => OUTCOMES[o])));
+    hBars(box, causes.map(cause => ({
+      label: cause.label.replaceAll('`', ''), value: A.cause[cause.cause], color: OUTCOMES[causeOutcome[cause.cause]].color,
+      note: `${pct(A.cause[cause.cause], failures)} of these failures`, cause: cause.cause,
+    })), 'Failure causes', item => selectCause(item.cause));
+  },
+  table() {
+    const causes = failureCauses();
+    const failures = sum(causes.map(cause => A.cause[cause.cause]));
+    return {
+      columns: [{label: 'Cause'}, {label: 'Result'}, {label: 'Patches', num: true}, {label: 'Share', num: true}],
+      rows: causes.map(cause => [cause.label.replaceAll('`', ''), OUTCOMES[causeOutcome[cause.cause]].label, A.cause[cause.cause], pct(A.cause[cause.cause], failures)]),
+    };
+  },
+});
+
+card({
+  title: 'CVE coverage by year', wide: true,
+  sub: () => `All ${fmt(NCVE)} Linux CVEs by the year in their ID. A CVE has a VIC when at least one of its patches from the selected sources produced one.`,
+  draw(box) {
+    box.append(legend(COVERAGE));
+    vColumns(box, YEARS, COVERAGE, A.byYear, {label: 'CVE coverage by year'});
+  },
+  table() {
+    return {
+      columns: [{label: 'Year'}, ...COVERAGE.map(c => ({label: c.label, num: true})), {label: 'CVEs', num: true}, {label: 'With a VIC', num: true}],
+      rows: YEARS.map((year, i) => [String(year), ...A.byYear[i], sum(A.byYear[i]), pct(A.byYear[i][0], sum(A.byYear[i]))]).reverse(),
+    };
+  },
+});
+
+card({
+  title: 'CVE coverage by severity',
+  sub: 'Share of the Linux CVEs at each severity that have a VIC. Unknown means the CVE has no severity score.',
+  draw(box) {
+    box.append(legend(COVERAGE));
+    hStack100(box, D.severities.map((sev, i) => ({label: SEVERITY_LABELS[sev], values: A.bySeverity[i]})), COVERAGE, 'CVEs', 'CVE coverage by severity');
+  },
+  table() {
+    return {
+      columns: [{label: 'Severity'}, ...COVERAGE.map(c => ({label: c.label, num: true})), {label: 'CVEs', num: true}, {label: 'With a VIC', num: true}],
+      rows: D.severities.map((sev, i) => [SEVERITY_LABELS[sev], ...A.bySeverity[i], sum(A.bySeverity[i]), pct(A.bySeverity[i][0], sum(A.bySeverity[i]))]),
+    };
+  },
+});
+
+function timeBuckets() {
+  const counts = TIME_BUCKETS.map(() => 0);
+  for (const t of A.plTimes) counts[TIME_BUCKETS.findIndex(([lo, hi]) => t >= lo && t < hi)]++;
+  return counts;
+}
+card({
+  title: 'PatchLens time per patch',
+  sub: 'Wall time of each successful PatchLens call, in milliseconds.',
+  draw(box) {
+    if (!A.plTimes.length) { box.append(h('p', {class: 'empty', text: 'No timed patches in this selection.'})); return; }
+    vColumns(box, TIME_BUCKETS.map(b => b[2]), [{label: 'Patches', color: 'var(--s1)'}], timeBuckets().map(v => [v]),
+      {capLabels: true, label: 'PatchLens time per patch', tipTitle: x => `${x} ms`});
+    const stat = (label, value) => h('span', {}, `${label} `, h('strong', {text: value}));
+    box.append(h('div', {class: 'stats'},
+      stat('Median', ms(quantile(A.plTimes, 0.5))),
+      stat('95th percentile', ms(quantile(A.plTimes, 0.95))),
+      stat('Total', `${(sum(A.plTimes) / 1000).toFixed(1)} s`),
+      stat('Median minimal-tree write', ms(quantile(A.treeTimes, 0.5)))));
+  },
+  table() {
+    const counts = timeBuckets();
+    return {
+      columns: [{label: 'Time, ms'}, {label: 'Patches', num: true}, {label: 'Share', num: true}],
+      rows: TIME_BUCKETS.map((b, i) => [b[2], counts[i], pct(counts[i], A.plTimes.length)]),
+    };
+  },
+});
+
+card({
+  title: 'Options per VIC',
+  sub: 'Distinct Kconfig options and Make variables each VIC mentions. Zero means the VIC is `True`.',
+  draw(box) {
+    if (!A.outcome[O.ok]) { box.append(h('p', {class: 'empty', text: 'No VICs in this selection.'})); return; }
+    vColumns(box, OPTION_BUCKETS.map(b => b[2]), [{label: 'VICs', color: 'var(--s1)'}], A.optionsPerVic.map(v => [v]),
+      {capLabels: true, label: 'Options per VIC', tipTitle: x => `${x} option${x === '1' ? '' : 's'}`});
+  },
+  table() {
+    return {
+      columns: [{label: 'Options'}, {label: 'VICs', num: true}, {label: 'Share', num: true}],
+      rows: OPTION_BUCKETS.map((b, i) => [b[2], A.optionsPerVic[i], pct(A.optionsPerVic[i], A.outcome[O.ok])]),
+    };
+  },
+});
+
+const SHAPES = [
+  ['always', '`True`', 'every config'],
+  ['single', 'One option', 'one condition'],
+  ['and', 'Only `&`', 'all must hold'],
+  ['or', 'Has `|`', 'any of several'],
+  ['arch', 'Mentions `ARCH`', 'some archs'],
+];
+card({
+  title: 'VIC shape',
+  sub: 'How the VICs are built. The first four add up to all VICs. `ARCH` overlaps with them.',
+  draw(box) {
+    const total = A.outcome[O.ok];
+    box.append(h('div', {class: 'shapes'}, ...SHAPES.map(([key, label, detail]) => {
+      const el = tile('', fmt(A.shape[key]), `${pct(A.shape[key], total)} · ${detail}`);
+      el.querySelector('.label').append(rich(label));
+      return el;
+    })));
+  },
+  table() {
+    return {
+      columns: [{label: 'Shape'}, {label: 'VICs', num: true}, {label: 'Share', num: true}],
+      rows: SHAPES.map(([key, label]) => [label.replaceAll('`', ''), A.shape[key], pct(A.shape[key], A.outcome[O.ok])]),
+    };
+  },
+});
+
+function topOptions(limit) {
+  return D.options.map((name, i) => ({name, count: A.optionCounts[i]}))
+    .filter(option => option.count > 0).sort((x, y) => y.count - x.count).slice(0, limit);
+}
+card({
+  title: 'Options that appear most in VICs', wide: true,
+  sub: 'Number of VICs that mention each option. The table lists the top 50.',
+  draw(box) {
+    const options = topOptions(15);
+    if (!options.length) { box.append(h('p', {class: 'empty', text: 'No VICs in this selection.'})); return; }
+    hBars(box, options.map(option => ({
+      label: option.name, value: option.count, color: 'var(--s1)', note: `${pct(option.count, A.outcome[O.ok])} of VICs`,
+    })), 'Most common options in VICs', item => { explorer.query = item.label; selectCause('analyzed'); });
+  },
+  table() {
+    return {
+      columns: [{label: 'Option'}, {label: 'VICs', num: true}, {label: 'Share of VICs', num: true}],
+      rows: topOptions(50).map(option => [option.name, option.count, pct(option.count, A.outcome[O.ok])]),
+    };
+  },
+});
+
+// ---------- explorer ----------
+const searchText = new Array(N);
+function rowSearchText(i) {
+  return (searchText[i] ??= `${D.cves.id[R.cve[i]]} ${R.id[i]} ${R.detail[i] ?? ''}`.toLowerCase());
+}
+function selectCause(cause) {
+  explorer.cause = String(cause);
+  explorer.limit = PAGE;
+  document.getElementById('explorer-search').value = explorer.query;
+  renderExplorer();
+  document.getElementById('explorer').scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+function renderExplorer() {
+  const select = document.getElementById('explorer-cause');
+  const options = [
+    h('option', {value: 'analyzed', text: `All but likely backports · ${fmt(A.rows.length - A.outcome[O.backport])}`}),
+    h('option', {value: 'all', text: `All results · ${fmt(A.rows.length)}`}),
+  ];
+  D.causes.forEach((cause, i) => {
+    if (A.cause[i]) options.push(h('option', {value: String(i), text: `${cause.label.replaceAll('`', '')} · ${fmt(A.cause[i])}`}));
+  });
+  select.replaceChildren(...options);
+  const byCause = explorer.cause !== 'all' && explorer.cause !== 'analyzed';
+  if (byCause && !A.cause[+explorer.cause]) explorer.cause = 'analyzed';
+  select.value = explorer.cause;
+
+  const query = explorer.query.trim().toLowerCase();
+  const matches = [];
+  for (const i of A.rows) {
+    if (explorer.cause === 'analyzed' ? causeOutcome[R.cause[i]] === O.backport : explorer.cause !== 'all' && R.cause[i] !== +explorer.cause) continue;
+    if (query && !rowSearchText(i).includes(query)) continue;
+    matches.push(i);
+  }
+  const shown = matches.slice(0, explorer.limit);
+  const wrap = document.getElementById('explorer-table');
+  if (!shown.length) {
+    wrap.replaceChildren(h('p', {class: 'empty', text: 'No patches match.'}));
+  } else {
+    wrap.replaceChildren(table(
+      [{label: 'CVE', class: 'nowrap'}, {label: 'Severity'}, {label: 'Source', class: 'nowrap'}, {label: 'Commit'}, {label: 'Result', class: 'result'}, {label: 'VIC or error'}],
+      shown.map(i => {
+        const cve = D.cves.id[R.cve[i]];
+        const detail = h('div', {class: 'mono clamp', text: R.detail[i] ?? ''});
+        detail.addEventListener('click', () => detail.classList.toggle('open'));
+        return [
+          h('a', {href: `https://nvd.nist.gov/vuln/detail/${cve}`, target: '_blank', rel: 'noopener', text: cve}),
+          SEVERITY_LABELS[D.severities[D.cves.sev[R.cve[i]]]],
+          D.sources[R.src[i]],
+          h('a', {class: 'mono', href: `https://git.kernel.org/stable/c/${R.id[i]}`, target: '_blank', rel: 'noopener', title: R.id[i], text: R.id[i].slice(0, 12)}),
+          D.causes[R.cause[i]].label.replaceAll('`', ''),
+          detail,
+        ];
+      })));
+  }
+  const count = document.getElementById('explorer-count');
+  count.replaceChildren(`Showing ${fmt(shown.length)} of ${fmt(matches.length)} matching patches.`);
+  if (matches.length > shown.length) {
+    count.append(h('button', {class: 'button', type: 'button', text: `Show ${PAGE * 2} more`, onclick: () => { explorer.limit += PAGE * 2; renderExplorer(); }}));
+  }
+}
+document.getElementById('explorer-cause').addEventListener('change', e => { explorer.cause = e.target.value; explorer.limit = PAGE; renderExplorer(); });
+let searchTimer;
+document.getElementById('explorer-search').addEventListener('input', e => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => { explorer.query = e.target.value; explorer.limit = PAGE; renderExplorer(); }, 150);
+});
+
+// ---------- render loop ----------
+function render() {
+  A = compute();
+  renderSummary();
+  renderAttention();
+  cards.forEach(renderCard);
+  renderExplorer();
+}
+let lastWidth = innerWidth, resizeTimer;
+addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    if (innerWidth === lastWidth) return;
+    lastWidth = innerWidth;
+    cards.forEach(renderCard);
+  }, 150);
+});
+renderMeta();
+render();
+</script>
+</body>
+</html>
